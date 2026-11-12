@@ -1,0 +1,6 @@
+{
+  "name": "MTK International Payments",
+  "description": "Système de gestion et suivi des ordres de paiement internationaux pour la Direction Financière et Comptable de la Manufacture des Tabacs de Kairouan (MTK).",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
