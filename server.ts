@@ -4,6 +4,7 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import { db, INITIAL_USERS } from './src/server/db';
 import { FilterParams, User, UserRole, PaymentStatus } from './src/types/payment';
+import { getDepositTargetStatus, STATUS_META } from './src/utils/workflowRules';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
@@ -72,6 +73,16 @@ async function startServer() {
       const user = getUserFromReq(req);
       const bank = db.createBank(req.body, user);
       res.status(201).json(bank);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.put('/api/banks/:id', (req: Request, res: Response) => {
+    try {
+      const user = getUserFromReq(req);
+      const updated = db.updateBank(req.params.id, req.body, user);
+      res.json(updated);
     } catch (err: any) {
       res.status(400).json({ error: err.message });
     }
@@ -146,15 +157,24 @@ async function startServer() {
     }
   });
 
-  // Enregistrement d'un dépôt bancaire
+  // Enregistrement d'un dépôt bancaire (conditionnel selon négociation du cours exigée)
   app.post('/api/orders/:id/deposit', (req: Request, res: Response) => {
     try {
       const user = getUserFromReq(req);
+      const existing = db.getOrderById(req.params.id);
+      if (!existing) {
+        res.status(404).json({ error: 'Ordre de paiement introuvable' });
+        return;
+      }
       const { bankId, bankName, depositDate, slipNumber, bankReference, notes, depositReceiptDocId } = req.body;
+      const targetStatus = getDepositTargetStatus(existing.requiresRateNegotiation);
       const updated = db.changeOrderStatus(
         req.params.id,
-        'DEPOSE_BANQUE',
-        notes || `Dépôt bancaire effectué - Bordereau N° ${slipNumber}`,
+        targetStatus,
+        notes ||
+          (existing.requiresRateNegotiation
+            ? `Dépôt bancaire effectué (Négociation exigée -> En attente d'achat devise) - Bordereau N° ${slipNumber}`
+            : `Dépôt bancaire effectué - Bordereau N° ${slipNumber}`),
         user,
         {
           bankId,
@@ -242,12 +262,47 @@ async function startServer() {
     res.json(stats);
   });
 
-  // 6. Audit Logs
+  // 6. Consultations d'achat de devises (Module 02)
+  app.get('/api/consultations', (_req: Request, res: Response) => {
+    res.json(db.getConsultations());
+  });
+
+  app.post('/api/consultations', (req: Request, res: Response) => {
+    try {
+      const user = getUserFromReq(req);
+      const consultation = db.createConsultation(req.body, user);
+      res.status(201).json(consultation);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/consultations/:id/quotes', (req: Request, res: Response) => {
+    try {
+      const user = getUserFromReq(req);
+      const updated = db.recordConsultationQuotes(req.params.id, req.body, user);
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.post('/api/consultations/:id/cancel', (req: Request, res: Response) => {
+    try {
+      const user = getUserFromReq(req);
+      const updated = db.cancelConsultation(req.params.id, req.body?.reason || '', user);
+      res.json(updated);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  // 7. Audit Logs
   app.get('/api/audit-logs', (_req: Request, res: Response) => {
     res.json(db.getAuditLogs());
   });
 
-  // 7. Réinitialisation des données de démo
+  // 8. Réinitialisation des données de démo
   app.post('/api/reset-demo', (_req: Request, res: Response) => {
     db.resetDemoData();
     res.json({ success: true, message: 'Données de démonstration réinitialisées avec succès' });
@@ -258,15 +313,16 @@ async function startServer() {
     const orders = db.getOrders();
     const headers = [
       'Numéro d’ordre',
-      'Exercice',
+      'Contrat',
       'Date de création',
       'Statut',
+      'Négociation cours exigée',
       'Fournisseur / Bénéficiaire',
       'Pays',
       'Devise',
       'Montant Devise',
       'Banque Tunisienne',
-      'N° Domiciliation',
+      'Type Transfert',
       'Réf Facture',
       'Date Dépôt Banque',
       'N° Bordereau',
@@ -278,15 +334,16 @@ async function startServer() {
 
     const rows = orders.map(o => [
       o.orderNumber,
-      o.fiscalYear,
+      o.contractNumber || '',
       o.createdAt.split('T')[0],
-      o.status,
+      STATUS_META[o.status]?.label || o.status,
+      o.requiresRateNegotiation ? 'OUI' : 'NON',
       `"${(o.beneficiaryName || '').replace(/"/g, '""')}"`,
       `"${(o.beneficiaryCountry || '').replace(/"/g, '""')}"`,
       o.currency,
       o.amount,
       `"${(o.bankName || '').replace(/"/g, '""')}"`,
-      o.domiciliationNumber || '',
+      o.transferType || 'VIREMENT',
       o.invoiceNumber || '',
       o.deposit?.depositDate || '',
       o.deposit?.slipNumber || '',

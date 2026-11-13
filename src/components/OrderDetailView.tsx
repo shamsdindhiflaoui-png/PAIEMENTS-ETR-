@@ -32,7 +32,6 @@ interface OrderDetailViewProps {
   onStatusChange: (targetStatus: PaymentStatus, comment: string) => Promise<void>;
   onOpenDepositModal: () => void;
   onOpenExecutionModal: () => void;
-  onOpenReviewModal: () => void;
   onPrintOrder: () => void;
   onAddDocument: (doc: any) => Promise<void>;
 }
@@ -44,7 +43,6 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
   onStatusChange,
   onOpenDepositModal,
   onOpenExecutionModal,
-  onOpenReviewModal,
   onPrintOrder,
   onAddDocument,
 }) => {
@@ -53,7 +51,23 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
   const [cancelReason, setCancelReason] = useState<string>('');
   const [uploadDocType, setUploadDocType] = useState<DocumentType>('AUTRE');
 
-  const meta = STATUS_META[order.status] || STATUS_META.BROUILLON;
+  const meta = STATUS_META[order.status] || STATUS_META.SAISI;
+  const currentStep = meta.stepNumber;
+  const stage4Label =
+    order.exchangeTransaction?.status === 'VALIDE'
+      ? 'Déposé à la banque (Devise achetée)'
+      : order.status === 'DEPOSE_BANQUE'
+      ? 'Déposé à la banque'
+      : order.requiresRateNegotiation
+      ? "En attente d'achat devise"
+      : 'Déposé à la banque';
+  const workflowSteps = [
+    { step: 1, label: 'Saisi (Brouillon)' },
+    { step: 2, label: 'Transmis pour signature' },
+    { step: 3, label: 'Signé' },
+    { step: 4, label: stage4Label },
+    { step: 5, label: 'Exécuté' },
+  ];
 
   // Handle direct file upload in tab 4
   const handleUploadDoc = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -124,30 +138,51 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
             <span>Imprimer Ordre</span>
           </button>
 
-          {/* Action 1: Transmit to CG if SAISI or BROUILLON */}
-          {(order.status === 'BROUILLON' || order.status === 'SAISI' || order.status === 'RETOURNE_CORRECTION') && (
+          {/* Action 1: Transmit for signature if SAISI */}
+          {order.status === 'SAISI' && (
             <button
-              onClick={() => onStatusChange('TRANSMIS_CG', 'Transmission au Contrôle de Gestion pour validation')}
+              onClick={() =>
+                onStatusChange(
+                  'TRANSMIS_SIGNATURE',
+                  'Transmission pour signature officielle de la direction'
+                )
+              }
               className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors shadow-xs"
             >
               <Send className="w-4 h-4" />
-              <span>Transmettre au Contrôle</span>
+              <span>Transmettre pour signature</span>
             </button>
           )}
 
-          {/* Action 2: Review by Contrôle de Gestion */}
-          {order.status === 'TRANSMIS_CG' && (
-            <button
-              onClick={onOpenReviewModal}
-              className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors shadow-xs"
-            >
-              <CheckCircle className="w-4 h-4" />
-              <span>Décision Contrôle de Gestion</span>
-            </button>
+          {/* Action 2: Sign or return to SAISI if TRANSMIS_SIGNATURE */}
+          {order.status === 'TRANSMIS_SIGNATURE' && (
+            <>
+              <button
+                onClick={() =>
+                  onStatusChange('SAISI', 'Retour en brouillon (Saisi) pour ajustement')
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-orange-700 bg-orange-50 hover:bg-orange-100 border border-orange-200 rounded-lg transition-colors"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+                <span>Retourner (Saisi)</span>
+              </button>
+              <button
+                onClick={() =>
+                  onStatusChange(
+                    'SIGNE',
+                    'Ordre vérifié et signé par la direction financière'
+                  )
+                }
+                className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-amber-600 hover:bg-amber-700 rounded-lg transition-colors shadow-xs"
+              >
+                <CheckCircle className="w-4 h-4" />
+                <span>Signer l'ordre</span>
+              </button>
+            </>
           )}
 
-          {/* Action 3: Record Bank Deposit after CG validation */}
-          {order.status === 'VALIDE_CG' && (
+          {/* Action 3: Record Bank Deposit after SIGNE */}
+          {order.status === 'SIGNE' && (
             <button
               onClick={onOpenDepositModal}
               className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 rounded-lg transition-colors shadow-xs"
@@ -158,7 +193,7 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
           )}
 
           {/* Action 4: Record Transfer Execution */}
-          {(order.status === 'DEPOSE_BANQUE' || order.status === 'ATTENTE_NEGOCIATION' || order.status === 'TAUX_VALIDE' || order.status === 'EN_COURS_EXECUTION') && (
+          {(order.status === 'DEPOSE_BANQUE' || order.status === 'EN_ATTENTE_ACHAT_DEVISE') && (
             <button
               onClick={onOpenExecutionModal}
               className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shadow-xs"
@@ -169,7 +204,7 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
           )}
 
           {/* Action 5: Administrative Cancellation (Traceable, non-destructive) */}
-          {order.status !== 'EXECUTE' && order.status !== 'ANNULE' && order.status !== 'REJETE' && (
+          {order.status !== 'EXECUTE' && order.status !== 'ANNULE' && (
             <button
               onClick={() => setCancelModalOpen(true)}
               className="inline-flex items-center gap-1 px-2.5 py-1.5 text-xs font-medium text-rose-700 hover:bg-rose-50 rounded-lg transition-colors"
@@ -180,6 +215,77 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
             </button>
           )}
         </div>
+      </div>
+
+      {/* 5-Stage Visual Workflow Stepper */}
+      <div className="bg-white rounded-xl border border-slate-200 p-4 shadow-2xs">
+        <div className="flex items-center justify-between mb-3">
+          <span className="text-[11px] font-bold text-slate-700 uppercase tracking-wider">
+            Progression du Circuit de Paiement (5 étapes)
+          </span>
+          <span
+            className={`text-[11px] font-semibold px-2.5 py-0.5 rounded border ${
+              order.exchangeTransaction?.status === 'VALIDE'
+                ? 'bg-emerald-50 text-emerald-800 border-emerald-200'
+                : order.requiresRateNegotiation
+                ? 'bg-purple-50 text-purple-800 border-purple-200'
+                : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+            }`}
+          >
+            {order.exchangeTransaction?.status === 'VALIDE'
+              ? `Devise achetée · ${
+                  order.exchangeTransaction.selectedBankName || order.bankName
+                } (${(
+                  order.finalExchangeRate ||
+                  order.exchangeTransaction.finalNegotiatedRate ||
+                  0
+                ).toFixed(4)} TND)`
+              : order.requiresRateNegotiation
+              ? "Option : Négociation cours exigée (En attente d'achat devise)"
+              : 'Option : Dépôt direct (Déposé à la banque)'}
+          </span>
+        </div>
+
+        {order.status === 'ANNULE' ? (
+          <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-xs font-semibold text-rose-800 flex items-center gap-2">
+            <Ban className="w-4 h-4 text-rose-600 shrink-0" />
+            <span>Cet ordre a été annulé administrativement. Aucun traitement ultérieur n'est autorisé.</span>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 sm:grid-cols-5 gap-2">
+            {workflowSteps.map(ws => {
+              const isCompleted = currentStep > ws.step || (ws.step === 5 && order.status === 'EXECUTE');
+              const isCurrent = currentStep === ws.step && order.status !== 'EXECUTE';
+              return (
+                <div
+                  key={ws.step}
+                  className={`p-2.5 rounded-lg border text-xs flex items-center gap-2 transition-colors ${
+                    isCompleted
+                      ? 'bg-emerald-50/70 border-emerald-200 text-emerald-900'
+                      : isCurrent
+                      ? 'bg-blue-50 border-blue-400 text-blue-950 ring-1 ring-blue-300'
+                      : 'bg-slate-50 border-slate-200 text-slate-400'
+                  }`}
+                >
+                  <div
+                    className={`w-5 h-5 rounded-full flex items-center justify-center text-[10px] font-bold shrink-0 ${
+                      isCompleted
+                        ? 'bg-emerald-600 text-white'
+                        : isCurrent
+                        ? 'bg-blue-700 text-white'
+                        : 'bg-slate-200 text-slate-500'
+                    }`}
+                  >
+                    {isCompleted ? '✓' : ws.step}
+                  </div>
+                  <span className={`leading-tight ${isCurrent ? 'font-bold' : 'font-medium'}`}>
+                    {ws.label}
+                  </span>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* 6 Tabs Navigation Header */}
@@ -245,6 +351,11 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                   <div className="text-xs font-bold text-slate-900 mt-1.5 flex items-center gap-1.5">
                     <span className="w-2 h-2 rounded-full bg-blue-600" />
                     <span>{meta.label}</span>
+                  </div>
+                  <div className="text-[10px] text-slate-500 mt-1">
+                    {order.requiresRateNegotiation
+                      ? 'Négociation cours : Exigée'
+                      : 'Négociation cours : Non exigée'}
                   </div>
                 </div>
               </div>
@@ -529,7 +640,7 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
               {/* Chronological Timeline */}
               <div className="relative pl-6 space-y-6 before:content-[''] before:absolute before:left-2.5 before:top-3 before:bottom-3 before:w-0.5 before:bg-slate-200">
                 {order.history.map((h, i) => {
-                  const toMeta = STATUS_META[h.toStatus] || STATUS_META.BROUILLON;
+                  const toMeta = STATUS_META[h.toStatus] || STATUS_META.SAISI;
                   return (
                     <div key={h.id || i} className="relative flex items-start gap-4">
                       {/* Timeline dot */}
@@ -624,7 +735,7 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                 ) : (
                   <div className="text-xs text-slate-500 py-3 flex items-center justify-between">
                     <span>Le dossier n'a pas encore fait l'objet d'un dépôt physique en agence bancaire.</span>
-                    {order.status === 'VALIDE_CG' && (
+                    {order.status === 'SIGNE' && (
                       <button
                         onClick={onOpenDepositModal}
                         className="px-3 py-1 bg-indigo-600 text-white rounded text-xs font-semibold hover:bg-indigo-700"
@@ -687,7 +798,7 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                     <span>
                       Les informations de dénouement (message SWIFT, cours négocié et commissions) seront renseignées lors de la clôture.
                     </span>
-                    {(order.status === 'DEPOSE_BANQUE' || order.status === 'TAUX_VALIDE' || order.status === 'EN_COURS_EXECUTION') && (
+                    {(order.status === 'DEPOSE_BANQUE' || order.status === 'EN_ATTENTE_ACHAT_DEVISE') && (
                       <button
                         onClick={onOpenExecutionModal}
                         className="px-3 py-1 bg-emerald-600 text-white rounded text-xs font-semibold hover:bg-emerald-700"
@@ -699,24 +810,78 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                 )}
               </div>
 
-              {/* Sub-section 3: Préparation pour Module 02 */}
-              <div className="p-5 rounded-xl border border-purple-200 bg-purple-50/40 space-y-2">
-                <div className="flex items-center gap-2 text-purple-900 font-bold text-xs uppercase tracking-wider">
-                  <DollarSign className="w-4 h-4 text-purple-700" />
-                  <span>Passerelle Module 02 : Consultation & Négociation de Change</span>
-                </div>
-                <p className="text-xs text-purple-950 leading-relaxed">
-                  Cet ordre de paiement est structuré pour s'interconnecter avec le module de cotations multi-banques (salle des marchés).
-                  {order.exchangeTransaction?.savingsTnd ? (
-                    <span className="font-semibold block mt-1 text-emerald-800">
-                      Économie estimée réalisée sur la négociation : {formatTndCurrency(order.exchangeTransaction.savingsTnd)}
+              {/* Sub-section 3: Passerelle Module 02 */}
+              <div className="p-5 rounded-xl border border-purple-200 bg-purple-50/40 space-y-3">
+                <div className="flex items-center justify-between gap-2 flex-wrap">
+                  <div className="flex items-center gap-2 text-purple-900 font-bold text-xs uppercase tracking-wider">
+                    <DollarSign className="w-4 h-4 text-purple-700" />
+                    <span>Passerelle Module 02 : Consultation & Négociation de Change</span>
+                  </div>
+                  {order.exchangeTransaction?.status === 'VALIDE' && (
+                    <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 border border-emerald-300 px-2.5 py-0.5 rounded-full">
+                      Achat de devise confirmé
                     </span>
-                  ) : (
+                  )}
+                  {(order.exchangeTransaction?.status === 'CONSULTATION_EN_COURS' ||
+                    order.exchangeTransaction?.status === 'NEGOCIE') && (
+                    <span className="text-[11px] font-bold text-blue-800 bg-blue-100 border border-blue-200 px-2.5 py-0.5 rounded-full">
+                      Consultation en cours
+                    </span>
+                  )}
+                </div>
+
+                {order.exchangeTransaction?.consultationNumber ? (
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs pt-1">
+                    <div className="p-3 rounded-lg bg-white border border-purple-100">
+                      <span className="text-slate-500 text-[11px] uppercase">Consultation</span>
+                      <p className="font-mono font-bold text-blue-800 mt-0.5">
+                        {order.exchangeTransaction.consultationNumber}
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white border border-purple-100">
+                      <span className="text-slate-500 text-[11px] uppercase">Banque d'achat retenue</span>
+                      <p className="font-semibold text-slate-900 mt-0.5">
+                        {order.exchangeTransaction.selectedBankName || 'En attente de clôture'}
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white border border-purple-100">
+                      <span className="text-slate-500 text-[11px] uppercase">Cours négocié</span>
+                      <p className="font-mono font-bold text-emerald-700 mt-0.5">
+                        {(
+                          order.finalExchangeRate ||
+                          order.exchangeTransaction.finalNegotiatedRate
+                        )
+                          ? `${(
+                              order.finalExchangeRate ||
+                              order.exchangeTransaction.finalNegotiatedRate ||
+                              0
+                            ).toFixed(4)} TND`
+                          : '—'}
+                      </p>
+                    </div>
+                    <div className="p-3 rounded-lg bg-white border border-purple-100">
+                      <span className="text-slate-500 text-[11px] uppercase">Économie réalisée</span>
+                      <p className="font-mono font-bold text-emerald-800 mt-0.5">
+                        {order.exchangeTransaction.savingsTnd
+                          ? formatTndCurrency(order.exchangeTransaction.savingsTnd)
+                          : '—'}
+                      </p>
+                    </div>
+                  </div>
+                ) : (
+                  <p className="text-xs text-purple-950 leading-relaxed">
+                    Cet ordre de paiement est structuré pour s'interconnecter avec le module de cotations multi-banques (salle des marchés).
                     <span className="block mt-1 text-slate-600">
                       Dès le dépôt bancaire, l'ordre est disponible pour la mise en concurrence des devises.
                     </span>
-                  )}
-                </p>
+                  </p>
+                )}
+
+                {order.exchangeTransaction?.notes && (
+                  <div className="text-[11px] text-slate-700 bg-white/80 border border-purple-100 rounded-lg px-3 py-2">
+                    <strong>Détails confirmation :</strong> {order.exchangeTransaction.notes}
+                  </div>
+                )}
               </div>
             </div>
           )}

@@ -32,6 +32,8 @@ export const Header: React.FC<HeaderProps> = ({
         return 'Registre des ordres de paiement internationaux';
       case 'pending_review':
         return 'Ordres en attente de traitement & validation';
+      case 'consultations':
+        return 'Module 02 · Consultations pour achat de devises';
       case 'audit_logs':
         return 'Journal d’audit & historique des opérations';
       case 'settings':

@@ -11,6 +11,7 @@ import {
   UserCheck,
   Briefcase,
   FileText,
+  BadgeDollarSign,
 } from 'lucide-react';
 import { User, UserRole } from '../types/payment';
 
@@ -19,6 +20,7 @@ export type NavItem =
   | 'new_order'
   | 'orders_list'
   | 'pending_review'
+  | 'consultations'
   | 'audit_logs'
   | 'settings';
 
@@ -26,6 +28,7 @@ interface SidebarProps {
   activeView: NavItem;
   onNavigate: (view: NavItem) => void;
   pendingCount: number;
+  consultationPendingCount?: number;
   currentUser: User;
   onUserChange: (user: User) => void;
   users: User[];
@@ -35,6 +38,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeView,
   onNavigate,
   pendingCount,
+  consultationPendingCount = 0,
   currentUser,
   onUserChange,
   users,
@@ -77,6 +81,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Ordres en attente',
       icon: ClockAlert,
       badge: pendingCount > 0 ? pendingCount : null,
+    },
+    {
+      id: 'consultations' as NavItem,
+      label: 'Consultations de change',
+      icon: BadgeDollarSign,
+      badge: consultationPendingCount > 0 ? consultationPendingCount : null,
     },
     {
       id: 'audit_logs' as NavItem,
@@ -167,7 +177,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
             <span className="text-emerald-400 text-[10px] font-mono">En ligne</span>
           </div>
           <p className="text-[11px] leading-relaxed text-slate-400">
-            Prêt pour passerelle Module 02 : négociation des cotations et salle des marchés.
+            Module 02 actif : regroupement d'ordres et consultations pour achat de devises.
           </p>
         </div>
       </nav>

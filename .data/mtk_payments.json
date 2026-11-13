@@ -2,6 +2,7 @@
   "users": [
     {
       "id": "usr_admin",
+      "userCode": "000",
       "name": "Admin DFC",
       "email": "admin.dfc@mtk.tn",
       "role": "ADMINISTRATEUR",
@@ -9,6 +10,7 @@
     },
     {
       "id": "usr_agent1",
+      "userCode": "001",
       "name": "Monia Ben Salem",
       "email": "m.bensalem@mtk.tn",
       "role": "AGENT_FINANCIER",
@@ -16,6 +18,7 @@
     },
     {
       "id": "usr_cg",
+      "userCode": "002",
       "name": "Karim Mezghani",
       "email": "k.mezghani@mtk.tn",
       "role": "CONTROLE_GESTION",
@@ -23,6 +26,7 @@
     },
     {
       "id": "usr_rf",
+      "userCode": "003",
       "name": "Samir Trabelsi",
       "email": "s.trabelsi@mtk.tn",
       "role": "RESPONSABLE_FINANCIER",
@@ -117,7 +121,29 @@
       "swiftCode": "STBKTNTT",
       "country": "Tunisie",
       "active": true,
-      "contactAgency": "Agence Kairouan République (012)"
+      "contactAgency": "Agence Kairouan République (012)",
+      "tradingDeskName": "STB SALLE DE CHANGE",
+      "tradingDeskAddress": "STB SALLE DE CHANGE",
+      "tradingDeskFax": "70.140.415",
+      "tradingDeskPhone": "70.140.000",
+      "contactEmails": [
+        "salle.change@stb.com.tn",
+        "Agence.Kairouan@stb.com.tn"
+      ],
+      "confirmationContacts": [
+        {
+          "id": "cnt_stb_1",
+          "name": "Salle de Change STB",
+          "role": "Salle des marchés",
+          "email": "salle.change@stb.com.tn"
+        },
+        {
+          "id": "cnt_stb_2",
+          "name": "Agence Kairouan République",
+          "role": "Domiciliation",
+          "email": "Agence.Kairouan@stb.com.tn"
+        }
+      ]
     },
     {
       "id": "bank_bna",
@@ -126,7 +152,35 @@
       "swiftCode": "BNANTNTT",
       "country": "Tunisie",
       "active": true,
-      "contactAgency": "Agence Kairouan Médina (034)"
+      "contactAgency": "AGENCE KAIROUAN",
+      "tradingDeskName": "BNA SALLE DE CHANGE",
+      "tradingDeskAddress": "BNA SALLE DE CHANGE",
+      "tradingDeskFax": "70.257.362",
+      "contactEmails": [
+        "WASSIM.ATTIA@bna.tn",
+        "SANA.CHEFFAI@bna.tn",
+        "Agence.Kairouan@bna.tn"
+      ],
+      "confirmationContacts": [
+        {
+          "id": "cnt_bna_1",
+          "name": "Wassim Attia",
+          "role": "Salle de change",
+          "email": "WASSIM.ATTIA@bna.tn"
+        },
+        {
+          "id": "cnt_bna_2",
+          "name": "Sana Cheffai",
+          "role": "Salle de change",
+          "email": "SANA.CHEFFAI@bna.tn"
+        },
+        {
+          "id": "cnt_bna_3",
+          "name": "Agence Kairouan",
+          "role": "Domiciliation",
+          "email": "Agence.Kairouan@bna.tn"
+        }
+      ]
     },
     {
       "id": "bank_bh",
@@ -135,7 +189,28 @@
       "swiftCode": "BHTNTNTT",
       "country": "Tunisie",
       "active": true,
-      "contactAgency": "Agence Kairouan Okba (008)"
+      "contactAgency": "Agence Kairouan Okba (008)",
+      "tradingDeskName": "BH BANK SALLE DE MARCHE",
+      "tradingDeskAddress": "BH BANK SALLE DE MARCHE",
+      "tradingDeskFax": "71.790.240",
+      "contactEmails": [
+        "marches@bhbank.tn",
+        "Agence.Kairouan@bhbank.tn"
+      ],
+      "confirmationContacts": [
+        {
+          "id": "cnt_bh_1",
+          "name": "Salle des Marchés BH",
+          "role": "Salle de marché",
+          "email": "marches@bhbank.tn"
+        },
+        {
+          "id": "cnt_bh_2",
+          "name": "Agence Kairouan Okba",
+          "role": "Domiciliation",
+          "email": "Agence.Kairouan@bhbank.tn"
+        }
+      ]
     },
     {
       "id": "bank_biat",
@@ -144,7 +219,29 @@
       "swiftCode": "BIATTNTT",
       "country": "Tunisie",
       "active": true,
-      "contactAgency": "Agence Kairouan Centre (021)"
+      "contactAgency": "Agence Kairouan Centre (021)",
+      "tradingDeskName": "BIAT (Salle de change)",
+      "tradingDeskAddress": "Markets.Sales@biat.com.tn",
+      "tradingDeskFax": "71.340.958 / 71.344.524",
+      "tradingDeskPhone": "71.336.472",
+      "contactEmails": [
+        "Markets.Sales@biat.com.tn",
+        "Agence.Kairouan@biat.tn"
+      ],
+      "confirmationContacts": [
+        {
+          "id": "cnt_biat_1",
+          "name": "Markets & Sales",
+          "role": "Salle de change",
+          "email": "Markets.Sales@biat.com.tn"
+        },
+        {
+          "id": "cnt_biat_2",
+          "name": "Agence Kairouan",
+          "role": "Domiciliation",
+          "email": "Agence.Kairouan@biat.tn"
+        }
+      ]
     },
     {
       "id": "bank_attijari",
@@ -153,7 +250,28 @@
       "swiftCode": "BSTNTNTT",
       "country": "Tunisie",
       "active": true,
-      "contactAgency": "Agence Kairouan Mansoura (015)"
+      "contactAgency": "Agence Kairouan Mansoura (015)",
+      "tradingDeskName": "ATTIJARI SALLE DES MARCHES",
+      "tradingDeskAddress": "ATTIJARI SALLE DES MARCHES",
+      "tradingDeskFax": "71.111.300",
+      "contactEmails": [
+        "salle.marches@attijaribank.com.tn",
+        "Agence.Kairouan@attijaribank.com.tn"
+      ],
+      "confirmationContacts": [
+        {
+          "id": "cnt_att_1",
+          "name": "Salle des Marchés Attijari",
+          "role": "Salle des marchés",
+          "email": "salle.marches@attijaribank.com.tn"
+        },
+        {
+          "id": "cnt_att_2",
+          "name": "Agence Kairouan Mansoura",
+          "role": "Domiciliation",
+          "email": "Agence.Kairouan@attijaribank.com.tn"
+        }
+      ]
     },
     {
       "id": "bank_amen",
@@ -162,7 +280,28 @@
       "swiftCode": "CFCTTNTT",
       "country": "Tunisie",
       "active": true,
-      "contactAgency": "Agence Kairouan Allani (042)"
+      "contactAgency": "Agence Kairouan Allani (042)",
+      "tradingDeskName": "AB SALLE DE MARCHE",
+      "tradingDeskAddress": "AB SALLE DE MARCHE",
+      "tradingDeskFax": "71.831.122 / 71.835.402",
+      "contactEmails": [
+        "imen.baklouti@amenbank.com.tn",
+        "mohamedamine.essid@amenbank.com.tn"
+      ],
+      "confirmationContacts": [
+        {
+          "id": "cnt_amen_1",
+          "name": "Imen Baklouti",
+          "role": "Salle de marché",
+          "email": "imen.baklouti@amenbank.com.tn"
+        },
+        {
+          "id": "cnt_amen_2",
+          "name": "Mohamed Amine Essid",
+          "role": "Salle de marché",
+          "email": "mohamedamine.essid@amenbank.com.tn"
+        }
+      ]
     },
     {
       "id": "bank_uib",
@@ -171,152 +310,31 @@
       "swiftCode": "UIBKTNTT",
       "country": "Tunisie",
       "active": true,
-      "contactAgency": "Agence Kairouan Ville (009)"
+      "contactAgency": "Agence Kairouan Ville (009)",
+      "tradingDeskName": "UIB SALLE DES MARCHES",
+      "tradingDeskAddress": "UIB SALLE DES MARCHES",
+      "tradingDeskFax": "71.800.912",
+      "contactEmails": [
+        "salle.marches@uib.com.tn",
+        "Agence.Kairouan@uib.com.tn"
+      ],
+      "confirmationContacts": [
+        {
+          "id": "cnt_uib_1",
+          "name": "Salle des Marchés UIB",
+          "role": "Salle des marchés",
+          "email": "salle.marches@uib.com.tn"
+        },
+        {
+          "id": "cnt_uib_2",
+          "name": "Agence Kairouan Ville",
+          "role": "Domiciliation",
+          "email": "Agence.Kairouan@uib.com.tn"
+        }
+      ]
     }
   ],
   "orders": [
-    {
-      "id": "ord_1794476255929",
-      "orderNumber": "001-026-0007",
-      "userCode": "001",
-      "yearCode": "026",
-      "orderSeq": "0007",
-      "contractNumber": "CT-2026/MTK-099",
-      "transferType": "LC",
-      "lcNumber": "LC-STB-2026-0045",
-      "fiscalYear": 2026,
-      "createdAt": "2026-11-12T09:37:35.929Z",
-      "updatedAt": "2026-11-12T09:37:35.929Z",
-      "createdBy": "Monia Ben Salem",
-      "createdById": "usr_agent1",
-      "department": "Direction Financière et Comptable",
-      "purpose": "Règlement fourniture filtres acétate pour cigarettes MTK",
-      "beneficiaryName": "SWM International",
-      "beneficiaryCountry": "France",
-      "beneficiaryAddress": "",
-      "beneficiaryBank": "",
-      "beneficiaryIban": "",
-      "beneficiarySwift": "",
-      "currency": "EUR",
-      "amount": 125400,
-      "amountInWords": "Cent vingt-cinq mille quatre cents euros",
-      "transferPurpose": "Règlement fourniture filtres acétate pour cigarettes MTK",
-      "invoiceNumber": "FAC-SWM-2026-881",
-      "invoiceDate": "2026-11-12",
-      "domiciliationNumber": "",
-      "operationNature": "Importation tabac brut",
-      "bankId": "bank_stb",
-      "bankName": "Société Tunisienne de Banque",
-      "bankBranch": "Agence Kairouan République",
-      "bankFileRef": "",
-      "remarks": "",
-      "status": "TRANSMIS_CG",
-      "history": [
-        {
-          "id": "wf_1794476255929",
-          "orderId": "ord_1794476255929",
-          "fromStatus": "INITIAL",
-          "toStatus": "TRANSMIS_CG",
-          "timestamp": "2026-11-12T09:37:35.929Z",
-          "userId": "usr_agent1",
-          "userName": "Monia Ben Salem",
-          "userRole": "AGENT_FINANCIER",
-          "comment": "Création et transmission directe au Contrôle de Gestion"
-        }
-      ],
-      "documents": [],
-      "isDemo": false,
-      "exchangeTransaction": {
-        "id": "ex_1794476255929",
-        "orderId": "ord_1794476255929",
-        "status": "NON_DEMARRE"
-      }
-    },
-    {
-      "id": "ord_1794474047852",
-      "orderNumber": "OP-2026-0006",
-      "fiscalYear": 2026,
-      "createdAt": "2026-11-12T09:00:47.852Z",
-      "updatedAt": "2026-11-12T09:01:59.030Z",
-      "createdBy": "Monia Ben Salem",
-      "createdById": "usr_agent1",
-      "department": "Direction des Approvisionnements",
-      "purpose": "Fourniture de couteaux et meules pour machines à confectionner",
-      "supplierId": "sup_hauni",
-      "beneficiaryName": "Hauni Maschinenbau GmbH (Körber Technologies)",
-      "beneficiaryCountry": "Allemagne",
-      "beneficiaryAddress": "Kampchaussee 8-32, 21033 Hamburg",
-      "beneficiaryBank": "Deutsche Bank AG Hamburg",
-      "beneficiaryIban": "DE89200700000123456789",
-      "beneficiarySwift": "DEUTDEDBHAM",
-      "currency": "EUR",
-      "amount": 84500,
-      "amountInWords": "Quatre-vingt-quatre mille cinq cents euros",
-      "transferPurpose": "Fourniture de couteaux et meules pour machines à confectionner",
-      "invoiceNumber": "FAC-HAUNI-2026-88",
-      "invoiceDate": "2026-11-12",
-      "domiciliationNumber": "DOM-2026-BNA-045",
-      "operationNature": "Importation tabac brut",
-      "bankId": "bank_stb",
-      "bankName": "Société Tunisienne de Banque",
-      "bankBranch": "Agence Kairouan République",
-      "bankFileRef": "",
-      "remarks": "",
-      "status": "DEPOSE_BANQUE",
-      "history": [
-        {
-          "id": "wf_1794474047852",
-          "orderId": "ord_1794474047852",
-          "fromStatus": "INITIAL",
-          "toStatus": "TRANSMIS_CG",
-          "timestamp": "2026-11-12T09:00:47.852Z",
-          "userId": "usr_agent1",
-          "userName": "Monia Ben Salem",
-          "userRole": "AGENT_FINANCIER",
-          "comment": "Création et transmission directe au Contrôle de Gestion"
-        },
-        {
-          "id": "wf_1794474084848",
-          "orderId": "ord_1794474047852",
-          "fromStatus": "TRANSMIS_CG",
-          "toStatus": "VALIDE_CG",
-          "timestamp": "2026-11-12T09:01:24.848Z",
-          "userId": "usr_cg",
-          "userName": "Karim Mezghani",
-          "userRole": "CONTROLE_GESTION",
-          "comment": "Vérification budgétaire effectuée. Dossier conforme et complet pour émission bancaire."
-        },
-        {
-          "id": "wf_1794474119030",
-          "orderId": "ord_1794474047852",
-          "fromStatus": "VALIDE_CG",
-          "toStatus": "DEPOSE_BANQUE",
-          "timestamp": "2026-11-12T09:01:59.030Z",
-          "userId": "usr_agent1",
-          "userName": "Monia Ben Salem",
-          "userRole": "AGENT_FINANCIER",
-          "comment": "Dépôt physique du dossier complet avec pièces justificatives visées."
-        }
-      ],
-      "documents": [],
-      "isDemo": false,
-      "exchangeTransaction": {
-        "id": "ex_1794474047852",
-        "orderId": "ord_1794474047852",
-        "status": "NON_DEMARRE"
-      },
-      "deposit": {
-        "id": "dep_1794474119030",
-        "orderId": "ord_1794474047852",
-        "bankId": "bank_stb",
-        "bankName": "Société Tunisienne de Banque",
-        "depositDate": "2026-11-12",
-        "slipNumber": "BORD-2026-2026-0006",
-        "bankReference": "BORD-2026-2026-0006",
-        "depositedBy": "Monia Ben Salem",
-        "notes": "Dépôt physique du dossier complet avec pièces justificatives visées."
-      }
-    },
     {
       "id": "ord_demo_01",
       "orderNumber": "OP-2026-0001",
@@ -347,6 +365,7 @@
       "bankBranch": "Agence Kairouan République",
       "bankFileRef": "STB-EXT-2026-042",
       "remarks": "Dossier prioritaire pour continuité de la chaîne de fabrication.",
+      "requiresRateNegotiation": true,
       "status": "EXECUTE",
       "isDemo": true,
       "history": [
@@ -365,67 +384,45 @@
           "id": "wf_01_2",
           "orderId": "ord_demo_01",
           "fromStatus": "SAISI",
-          "toStatus": "TRANSMIS_CG",
+          "toStatus": "TRANSMIS_SIGNATURE",
           "timestamp": "2026-01-15T11:00:00.000Z",
           "userId": "usr_agent1",
           "userName": "Monia Ben Salem",
           "userRole": "AGENT_FINANCIER",
-          "comment": "Transmission au Contrôle de Gestion pour validation budgétaire."
+          "comment": "Transmission pour signature officielle de la DFC."
         },
         {
           "id": "wf_01_3",
           "orderId": "ord_demo_01",
-          "fromStatus": "TRANSMIS_CG",
-          "toStatus": "VALIDE_CG",
+          "fromStatus": "TRANSMIS_SIGNATURE",
+          "toStatus": "SIGNE",
           "timestamp": "2026-01-16T15:20:00.000Z",
-          "userId": "usr_cg",
-          "userName": "Karim Mezghani",
-          "userRole": "CONTROLE_GESTION",
-          "comment": "Engagement budgétaire vérifié (Ligne 60100 - Matières premières). Domiciliation conforme."
+          "userId": "usr_rf",
+          "userName": "Samir Trabelsi",
+          "userRole": "RESPONSABLE_FINANCIER",
+          "comment": "Ordre signé et autorisé pour dépôt bancaire."
         },
         {
           "id": "wf_01_4",
           "orderId": "ord_demo_01",
-          "fromStatus": "VALIDE_CG",
-          "toStatus": "DEPOSE_BANQUE",
+          "fromStatus": "SIGNE",
+          "toStatus": "EN_ATTENTE_ACHAT_DEVISE",
           "timestamp": "2026-01-18T10:00:00.000Z",
           "userId": "usr_agent1",
           "userName": "Monia Ben Salem",
           "userRole": "AGENT_FINANCIER",
-          "comment": "Dépôt physique à l’agence STB Kairouan avec bordereau de remise."
+          "comment": "Dépôt à la STB Kairouan (négociation de cours exigée -> En attente d’achat devise)."
         },
         {
           "id": "wf_01_5",
           "orderId": "ord_demo_01",
-          "fromStatus": "DEPOSE_BANQUE",
-          "toStatus": "TAUX_VALIDE",
-          "timestamp": "2026-01-20T11:30:00.000Z",
-          "userId": "usr_rf",
-          "userName": "Samir Trabelsi",
-          "userRole": "RESPONSABLE_FINANCIER",
-          "comment": "Négociation de change conclue à 3.1200 TND pour 1 USD."
-        },
-        {
-          "id": "wf_01_6",
-          "orderId": "ord_demo_01",
-          "fromStatus": "TAUX_VALIDE",
-          "toStatus": "EN_COURS_EXECUTION",
-          "timestamp": "2026-01-22T08:45:00.000Z",
-          "userId": "usr_rf",
-          "userName": "Samir Trabelsi",
-          "userRole": "RESPONSABLE_FINANCIER",
-          "comment": "Instruction de transfert confirmée auprès de la salle des marchés STB."
-        },
-        {
-          "id": "wf_01_7",
-          "orderId": "ord_demo_01",
-          "fromStatus": "EN_COURS_EXECUTION",
+          "fromStatus": "EN_ATTENTE_ACHAT_DEVISE",
           "toStatus": "EXECUTE",
           "timestamp": "2026-01-24T14:15:00.000Z",
           "userId": "usr_rf",
           "userName": "Samir Trabelsi",
           "userRole": "RESPONSABLE_FINANCIER",
-          "comment": "Réception de l’avis de débit SWIFT MT103. Transfert exécuté avec succès."
+          "comment": "Achat de devise conclu à 3.1200 TND et avis de débit SWIFT MT103 reçu."
         }
       ],
       "deposit": {
@@ -522,7 +519,8 @@
       "bankBranch": "Agence Kairouan Médina",
       "bankFileRef": "BNA-EXT-2026-019",
       "remarks": "Livraison express par DHL express Allemagne.",
-      "status": "TRANSMIS_CG",
+      "requiresRateNegotiation": false,
+      "status": "TRANSMIS_SIGNATURE",
       "isDemo": true,
       "history": [
         {
@@ -540,12 +538,12 @@
           "id": "wf_02_2",
           "orderId": "ord_demo_02",
           "fromStatus": "SAISI",
-          "toStatus": "TRANSMIS_CG",
+          "toStatus": "TRANSMIS_SIGNATURE",
           "timestamp": "2026-02-02T11:30:00.000Z",
           "userId": "usr_agent1",
           "userName": "Monia Ben Salem",
           "userRole": "AGENT_FINANCIER",
-          "comment": "Dossier transmis avec facture d’origine et certificat douanier."
+          "comment": "Dossier transmis pour signature avec facture d’origine et certificat douanier."
         }
       ],
       "documents": [
@@ -591,7 +589,8 @@
       "bankBranch": "Agence Kairouan Centre",
       "bankFileRef": "BIAT-EXT-2026-077",
       "remarks": "Bon de commande MTK-BC-2026-081 joint au dossier.",
-      "status": "VALIDE_CG",
+      "requiresRateNegotiation": true,
+      "status": "SIGNE",
       "isDemo": true,
       "history": [
         {
@@ -609,23 +608,23 @@
           "id": "wf_03_2",
           "orderId": "ord_demo_03",
           "fromStatus": "SAISI",
-          "toStatus": "TRANSMIS_CG",
+          "toStatus": "TRANSMIS_SIGNATURE",
           "timestamp": "2026-02-04T16:15:00.000Z",
           "userId": "usr_agent1",
           "userName": "Monia Ben Salem",
           "userRole": "AGENT_FINANCIER",
-          "comment": "Soumis au Contrôle de Gestion."
+          "comment": "Soumis pour signature."
         },
         {
           "id": "wf_03_3",
           "orderId": "ord_demo_03",
-          "fromStatus": "TRANSMIS_CG",
-          "toStatus": "VALIDE_CG",
+          "fromStatus": "TRANSMIS_SIGNATURE",
+          "toStatus": "SIGNE",
           "timestamp": "2026-02-05T09:45:00.000Z",
-          "userId": "usr_cg",
-          "userName": "Karim Mezghani",
-          "userRole": "CONTROLE_GESTION",
-          "comment": "Validé sans réserve. Crédit budgétaire disponible. Bon pour dépôt bancaire."
+          "userId": "usr_rf",
+          "userName": "Samir Trabelsi",
+          "userRole": "RESPONSABLE_FINANCIER",
+          "comment": "Ordre signé. Bon pour dépôt bancaire (avec négociation de cours exigée)."
         }
       ],
       "documents": [
@@ -680,7 +679,8 @@
       "bankName": "Société Tunisienne de Banque",
       "bankBranch": "Agence Kairouan République",
       "bankFileRef": "STB-EXT-2026-091",
-      "status": "DEPOSE_BANQUE",
+      "requiresRateNegotiation": true,
+      "status": "EN_ATTENTE_ACHAT_DEVISE",
       "isDemo": true,
       "history": [
         {
@@ -698,34 +698,34 @@
           "id": "wf_04_2",
           "orderId": "ord_demo_04",
           "fromStatus": "SAISI",
-          "toStatus": "TRANSMIS_CG",
+          "toStatus": "TRANSMIS_SIGNATURE",
           "timestamp": "2026-02-06T10:00:00.000Z",
           "userId": "usr_agent1",
           "userName": "Monia Ben Salem",
           "userRole": "AGENT_FINANCIER",
-          "comment": "Soumis au Contrôle."
+          "comment": "Transmis pour signature."
         },
         {
           "id": "wf_04_3",
           "orderId": "ord_demo_04",
-          "fromStatus": "TRANSMIS_CG",
-          "toStatus": "VALIDE_CG",
+          "fromStatus": "TRANSMIS_SIGNATURE",
+          "toStatus": "SIGNE",
           "timestamp": "2026-02-07T11:00:00.000Z",
-          "userId": "usr_cg",
-          "userName": "Karim Mezghani",
-          "userRole": "CONTROLE_GESTION",
-          "comment": "Validé favorablement."
+          "userId": "usr_rf",
+          "userName": "Samir Trabelsi",
+          "userRole": "RESPONSABLE_FINANCIER",
+          "comment": "Signé favorablement."
         },
         {
           "id": "wf_04_4",
           "orderId": "ord_demo_04",
-          "fromStatus": "VALIDE_CG",
-          "toStatus": "DEPOSE_BANQUE",
+          "fromStatus": "SIGNE",
+          "toStatus": "EN_ATTENTE_ACHAT_DEVISE",
           "timestamp": "2026-02-08T15:20:00.000Z",
           "userId": "usr_agent1",
           "userName": "Monia Ben Salem",
           "userRole": "AGENT_FINANCIER",
-          "comment": "Déposé auprès de la STB. Disponible pour consultation de cours de change."
+          "comment": "Déposé auprès de la STB (négociation de cours exigée : en attente d’achat devise)."
         }
       ],
       "deposit": {
@@ -796,7 +796,8 @@
       "bankName": "BH Bank",
       "bankBranch": "Agence Kairouan Okba",
       "bankFileRef": "BH-EXT-2026-011",
-      "status": "RETOURNE_CORRECTION",
+      "requiresRateNegotiation": false,
+      "status": "DEPOSE_BANQUE",
       "isDemo": true,
       "history": [
         {
@@ -814,25 +815,47 @@
           "id": "wf_05_2",
           "orderId": "ord_demo_05",
           "fromStatus": "SAISI",
-          "toStatus": "TRANSMIS_CG",
+          "toStatus": "TRANSMIS_SIGNATURE",
           "timestamp": "2026-02-09T11:00:00.000Z",
           "userId": "usr_agent1",
           "userName": "Monia Ben Salem",
           "userRole": "AGENT_FINANCIER",
-          "comment": "Transmis au CG."
+          "comment": "Transmis pour signature."
         },
         {
           "id": "wf_05_3",
           "orderId": "ord_demo_05",
-          "fromStatus": "TRANSMIS_CG",
-          "toStatus": "RETOURNE_CORRECTION",
+          "fromStatus": "TRANSMIS_SIGNATURE",
+          "toStatus": "SIGNE",
+          "timestamp": "2026-02-10T10:15:00.000Z",
+          "userId": "usr_rf",
+          "userName": "Samir Trabelsi",
+          "userRole": "RESPONSABLE_FINANCIER",
+          "comment": "Signé pour dépôt direct (négociation de cours non exigée)."
+        },
+        {
+          "id": "wf_05_4",
+          "orderId": "ord_demo_05",
+          "fromStatus": "SIGNE",
+          "toStatus": "DEPOSE_BANQUE",
           "timestamp": "2026-02-10T14:30:00.000Z",
-          "userId": "usr_cg",
-          "userName": "Karim Mezghani",
-          "userRole": "CONTROLE_GESTION",
-          "comment": "Pièce manquante : PV de réception technique signé par le Chef d’Atelier Confection manquant au dossier."
+          "userId": "usr_agent1",
+          "userName": "Monia Ben Salem",
+          "userRole": "AGENT_FINANCIER",
+          "comment": "Déposé directement à BH Bank Kairouan."
         }
       ],
+      "deposit": {
+        "id": "dep_05",
+        "orderId": "ord_demo_05",
+        "bankId": "bank_bh",
+        "bankName": "BH Bank",
+        "depositDate": "2026-02-10",
+        "slipNumber": "BORD-2026-BH-011",
+        "bankReference": "BH-DEP-4410",
+        "depositedBy": "Monia Ben Salem",
+        "notes": "Dépôt direct sans négociation préalable de cours."
+      },
       "documents": [
         {
           "id": "doc_05_1",
@@ -845,57 +868,204 @@
           "uploadedBy": "Monia Ben Salem"
         }
       ]
+    },
+    {
+      "id": "ord_demo_06",
+      "orderNumber": "OP-2026-0006",
+      "fiscalYear": 2026,
+      "createdAt": "2026-02-11T09:15:00.000Z",
+      "updatedAt": "2026-02-12T10:30:00.000Z",
+      "createdBy": "Monia Ben Salem",
+      "createdById": "usr_agent1",
+      "department": "Direction des Approvisionnements",
+      "purpose": "Importation lot tabac Burley - Tranche A",
+      "supplierId": "sup_universal_leaf",
+      "beneficiaryName": "Universal Leaf Tobacco Company Inc.",
+      "beneficiaryCountry": "États-Unis",
+      "beneficiaryAddress": "9201 Forest Hill Avenue, Richmond, VA 23235",
+      "beneficiaryBank": "JPMorgan Chase Bank, N.A., New York",
+      "beneficiaryIban": "US89CHAS32009876543210",
+      "beneficiarySwift": "CHASUS33",
+      "currency": "USD",
+      "amount": 24000,
+      "amountInWords": "Vingt-quatre mille dollars américains",
+      "transferPurpose": "Règlement facture ULT-2026-114",
+      "invoiceNumber": "FAC-ULT-2026-114",
+      "invoiceDate": "2026-02-08",
+      "contractNumber": "CT-2026/MTK-018",
+      "operationNature": "Importation tabac brut",
+      "bankId": "bank_stb",
+      "bankName": "Société Tunisienne de Banque",
+      "bankBranch": "Agence Kairouan République",
+      "bankFileRef": "STB-EXT-2026-118",
+      "transferType": "VIREMENT",
+      "requiresRateNegotiation": true,
+      "status": "EN_ATTENTE_ACHAT_DEVISE",
+      "isDemo": true,
+      "history": [
+        {
+          "id": "wf_06_1",
+          "orderId": "ord_demo_06",
+          "fromStatus": "INITIAL",
+          "toStatus": "SAISI",
+          "timestamp": "2026-02-11T09:15:00.000Z",
+          "userId": "usr_agent1",
+          "userName": "Monia Ben Salem",
+          "userRole": "AGENT_FINANCIER",
+          "comment": "Saisie initiale du dossier."
+        },
+        {
+          "id": "wf_06_2",
+          "orderId": "ord_demo_06",
+          "fromStatus": "SAISI",
+          "toStatus": "TRANSMIS_SIGNATURE",
+          "timestamp": "2026-02-11T11:00:00.000Z",
+          "userId": "usr_agent1",
+          "userName": "Monia Ben Salem",
+          "userRole": "AGENT_FINANCIER",
+          "comment": "Transmis pour signature."
+        },
+        {
+          "id": "wf_06_3",
+          "orderId": "ord_demo_06",
+          "fromStatus": "TRANSMIS_SIGNATURE",
+          "toStatus": "SIGNE",
+          "timestamp": "2026-02-11T16:00:00.000Z",
+          "userId": "usr_rf",
+          "userName": "Samir Trabelsi",
+          "userRole": "RESPONSABLE_FINANCIER",
+          "comment": "Signé avec négociation de cours exigée."
+        },
+        {
+          "id": "wf_06_4",
+          "orderId": "ord_demo_06",
+          "fromStatus": "SIGNE",
+          "toStatus": "EN_ATTENTE_ACHAT_DEVISE",
+          "timestamp": "2026-02-12T10:30:00.000Z",
+          "userId": "usr_agent1",
+          "userName": "Monia Ben Salem",
+          "userRole": "AGENT_FINANCIER",
+          "comment": "Déposé à la STB (négociation du cours exigée -> En attente d’achat devise)."
+        }
+      ],
+      "deposit": {
+        "id": "dep_06",
+        "orderId": "ord_demo_06",
+        "bankId": "bank_stb",
+        "bankName": "Société Tunisienne de Banque",
+        "depositDate": "2026-02-12",
+        "slipNumber": "BORD-2026-STB-045",
+        "bankReference": "STB-DEP-11402",
+        "depositedBy": "Monia Ben Salem",
+        "notes": "Dépôt effectué avec négociation de devise requise."
+      },
+      "exchangeTransaction": {
+        "id": "ex_06",
+        "orderId": "ord_demo_06",
+        "status": "NON_DEMARRE"
+      },
+      "documents": []
+    },
+    {
+      "id": "ord_demo_07",
+      "orderNumber": "OP-2026-0007",
+      "fiscalYear": 2026,
+      "createdAt": "2026-02-11T10:00:00.000Z",
+      "updatedAt": "2026-02-12T11:00:00.000Z",
+      "createdBy": "Monia Ben Salem",
+      "createdById": "usr_agent1",
+      "department": "Direction des Approvisionnements",
+      "purpose": "Importation lot tabac Burley - Tranche B",
+      "supplierId": "sup_universal_leaf",
+      "beneficiaryName": "Universal Leaf Tobacco Company Inc.",
+      "beneficiaryCountry": "États-Unis",
+      "beneficiaryAddress": "9201 Forest Hill Avenue, Richmond, VA 23235",
+      "beneficiaryBank": "JPMorgan Chase Bank, N.A., New York",
+      "beneficiaryIban": "US89CHAS32009876543210",
+      "beneficiarySwift": "CHASUS33",
+      "currency": "USD",
+      "amount": 15000,
+      "amountInWords": "Quinze mille dollars américains",
+      "transferPurpose": "Règlement facture ULT-2026-115",
+      "invoiceNumber": "FAC-ULT-2026-115",
+      "invoiceDate": "2026-02-09",
+      "contractNumber": "CT-2026/MTK-019",
+      "operationNature": "Importation tabac brut",
+      "bankId": "bank_biat",
+      "bankName": "Banque Internationale Arabe de Tunisie",
+      "bankBranch": "Agence Kairouan Centre",
+      "bankFileRef": "BIAT-EXT-2026-095",
+      "transferType": "VIREMENT",
+      "requiresRateNegotiation": true,
+      "status": "EN_ATTENTE_ACHAT_DEVISE",
+      "isDemo": true,
+      "history": [
+        {
+          "id": "wf_07_1",
+          "orderId": "ord_demo_07",
+          "fromStatus": "INITIAL",
+          "toStatus": "SAISI",
+          "timestamp": "2026-02-11T10:00:00.000Z",
+          "userId": "usr_agent1",
+          "userName": "Monia Ben Salem",
+          "userRole": "AGENT_FINANCIER",
+          "comment": "Saisie initiale du dossier."
+        },
+        {
+          "id": "wf_07_2",
+          "orderId": "ord_demo_07",
+          "fromStatus": "SAISI",
+          "toStatus": "TRANSMIS_SIGNATURE",
+          "timestamp": "2026-02-11T11:15:00.000Z",
+          "userId": "usr_agent1",
+          "userName": "Monia Ben Salem",
+          "userRole": "AGENT_FINANCIER",
+          "comment": "Transmis pour signature."
+        },
+        {
+          "id": "wf_07_3",
+          "orderId": "ord_demo_07",
+          "fromStatus": "TRANSMIS_SIGNATURE",
+          "toStatus": "SIGNE",
+          "timestamp": "2026-02-11T16:10:00.000Z",
+          "userId": "usr_rf",
+          "userName": "Samir Trabelsi",
+          "userRole": "RESPONSABLE_FINANCIER",
+          "comment": "Signé avec négociation de cours exigée."
+        },
+        {
+          "id": "wf_07_4",
+          "orderId": "ord_demo_07",
+          "fromStatus": "SIGNE",
+          "toStatus": "EN_ATTENTE_ACHAT_DEVISE",
+          "timestamp": "2026-02-12T11:00:00.000Z",
+          "userId": "usr_agent1",
+          "userName": "Monia Ben Salem",
+          "userRole": "AGENT_FINANCIER",
+          "comment": "Déposé à la BIAT (négociation du cours exigée -> En attente d’achat devise)."
+        }
+      ],
+      "deposit": {
+        "id": "dep_07",
+        "orderId": "ord_demo_07",
+        "bankId": "bank_biat",
+        "bankName": "Banque Internationale Arabe de Tunisie",
+        "depositDate": "2026-02-12",
+        "slipNumber": "BORD-2026-BIAT-019",
+        "bankReference": "BIAT-DEP-33901",
+        "depositedBy": "Monia Ben Salem",
+        "notes": "Prêt pour regroupement en consultation d’achat devise."
+      },
+      "exchangeTransaction": {
+        "id": "ex_07",
+        "orderId": "ord_demo_07",
+        "status": "NON_DEMARRE"
+      },
+      "documents": []
     }
   ],
+  "consultations": [],
   "auditLogs": [
-    {
-      "entityType": "PAYMENT_ORDER",
-      "entityId": "ord_1794476255929",
-      "entityRef": "001-026-0007",
-      "action": "ORDER_CREATED",
-      "userId": "usr_agent1",
-      "userName": "Monia Ben Salem",
-      "userRole": "AGENT_FINANCIER",
-      "details": "Création de l'ordre 001-026-0007 pour SWM International (125400 EUR). Statut: TRANSMIS_CG",
-      "id": "log_1794476255929_g57s",
-      "timestamp": "2026-11-12T09:37:35.929Z"
-    },
-    {
-      "entityType": "PAYMENT_ORDER",
-      "entityId": "ord_1794474047852",
-      "entityRef": "OP-2026-0006",
-      "action": "STATUS_CHANGED_DEPOSE_BANQUE",
-      "userId": "usr_agent1",
-      "userName": "Monia Ben Salem",
-      "userRole": "AGENT_FINANCIER",
-      "details": "Changement de statut : VALIDE_CG -> DEPOSE_BANQUE. Motif : Dépôt physique du dossier complet avec pièces justificatives visées.",
-      "id": "log_1794474119030_q33l",
-      "timestamp": "2026-11-12T09:01:59.030Z"
-    },
-    {
-      "entityType": "PAYMENT_ORDER",
-      "entityId": "ord_1794474047852",
-      "entityRef": "OP-2026-0006",
-      "action": "STATUS_CHANGED_VALIDE_CG",
-      "userId": "usr_cg",
-      "userName": "Karim Mezghani",
-      "userRole": "CONTROLE_GESTION",
-      "details": "Changement de statut : TRANSMIS_CG -> VALIDE_CG. Motif : Vérification budgétaire effectuée. Dossier conforme et complet pour émission bancaire.",
-      "id": "log_1794474084848_dkaz",
-      "timestamp": "2026-11-12T09:01:24.848Z"
-    },
-    {
-      "entityType": "PAYMENT_ORDER",
-      "entityId": "ord_1794474047852",
-      "entityRef": "OP-2026-0006",
-      "action": "ORDER_CREATED",
-      "userId": "usr_agent1",
-      "userName": "Monia Ben Salem",
-      "userRole": "AGENT_FINANCIER",
-      "details": "Création de l'ordre OP-2026-0006 pour Hauni Maschinenbau GmbH (Körber Technologies) (84500 EUR). Statut: TRANSMIS_CG",
-      "id": "log_1794474047852_ws97",
-      "timestamp": "2026-11-12T09:00:47.852Z"
-    },
     {
       "id": "log_01",
       "entityType": "PAYMENT_ORDER",

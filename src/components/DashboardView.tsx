@@ -216,87 +216,101 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
         </div>
       </div>
 
-      {/* Row 2: Workflow Stages Status Grid (Clickable to jump to filtered orders) */}
+      {/* Row 2: Workflow Stages Status Grid (5-Stage MTK Circuit) */}
       <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs">
         <h3 className="text-xs font-semibold text-slate-700 uppercase tracking-wider mb-4">
-          Circuit de Traitement Opérationnel (Ordres par Étape)
+          Circuit de Traitement Opérationnel (5 Statuts)
         </h3>
-        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
-          {/* 1. Attente CG */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
+          {/* 1. Saisi (Brouillon) */}
           <div
-            onClick={() => onNavigateToOrders('TRANSMIS_CG')}
-            className="p-3.5 rounded-lg border border-amber-200 bg-amber-50/60 hover:bg-amber-100/60 transition-colors cursor-pointer group"
+            onClick={() => onNavigateToOrders('SAISI')}
+            className="p-3.5 rounded-lg border border-slate-200 bg-slate-50/70 hover:bg-slate-100/80 transition-colors cursor-pointer group"
           >
-            <div className="flex items-center justify-between text-amber-800 mb-1">
-              <span className="text-xs font-medium">Attente Contrôle</span>
-              <Clock className="w-4 h-4 text-amber-600" />
+            <div className="flex items-center justify-between text-slate-700 mb-1">
+              <span className="text-xs font-medium">1. Saisi (Brouillon)</span>
+              <FileCheck className="w-4 h-4 text-slate-500" />
             </div>
-            <div className="text-xl font-bold font-mono text-amber-900 tabular-nums">
-              {stats.pendingValidationCount}
+            <div className="text-xl font-bold font-mono text-slate-900 tabular-nums">
+              {stats.saisiCount}
             </div>
-            <div className="text-[11px] text-amber-700 mt-1 font-medium group-hover:underline">
-              Vérification CG &rarr;
+            <div className="text-[11px] text-slate-600 mt-1 font-medium group-hover:underline">
+              En cours de saisie &rarr;
             </div>
           </div>
 
-          {/* 2. Validé CG */}
+          {/* 2. Transmis pour signature */}
           <div
-            onClick={() => onNavigateToOrders('VALIDE_CG')}
+            onClick={() => onNavigateToOrders('TRANSMIS_SIGNATURE')}
+            className="p-3.5 rounded-lg border border-amber-200 bg-amber-50/60 hover:bg-amber-100/60 transition-colors cursor-pointer group"
+          >
+            <div className="flex items-center justify-between text-amber-800 mb-1">
+              <span className="text-xs font-medium">2. Transmis signature</span>
+              <Clock className="w-4 h-4 text-amber-600" />
+            </div>
+            <div className="text-xl font-bold font-mono text-amber-900 tabular-nums">
+              {stats.transmisSignatureCount}
+            </div>
+            <div className="text-[11px] text-amber-700 mt-1 font-medium group-hover:underline">
+              Attente de signature &rarr;
+            </div>
+          </div>
+
+          {/* 3. Signé */}
+          <div
+            onClick={() => onNavigateToOrders('SIGNE')}
             className="p-3.5 rounded-lg border border-blue-200 bg-blue-50/60 hover:bg-blue-100/60 transition-colors cursor-pointer group"
           >
             <div className="flex items-center justify-between text-blue-800 mb-1">
-              <span className="text-xs font-medium">Validés CG</span>
-              <FileCheck className="w-4 h-4 text-blue-600" />
+              <span className="text-xs font-medium">3. Signé</span>
+              <Send className="w-4 h-4 text-blue-600" />
             </div>
             <div className="text-xl font-bold font-mono text-blue-900 tabular-nums">
-              {stats.validatedCount}
+              {stats.signeCount}
             </div>
             <div className="text-[11px] text-blue-700 mt-1 font-medium group-hover:underline">
               Prêts pour banque &rarr;
             </div>
           </div>
 
-          {/* 3. Déposés Banque */}
-          <div
-            onClick={() => onNavigateToOrders('DEPOSE_BANQUE')}
-            className="p-3.5 rounded-lg border border-indigo-200 bg-indigo-50/60 hover:bg-indigo-100/60 transition-colors cursor-pointer group"
-          >
-            <div className="flex items-center justify-between text-indigo-800 mb-1">
-              <span className="text-xs font-medium">Déposés Banque</span>
-              <Building className="w-4 h-4 text-indigo-600" />
+          {/* 4. Déposé à la banque / En attente d'achat devise */}
+          <div className="p-3.5 rounded-lg border border-indigo-200 bg-indigo-50/60 flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between text-indigo-800 mb-1">
+                <span className="text-xs font-medium">4. Dépôt / Achat devise</span>
+                <Building className="w-4 h-4 text-indigo-600" />
+              </div>
+              <div className="text-xl font-bold font-mono text-indigo-900 tabular-nums">
+                {stats.depositedCount + stats.pendingExchangeCount}
+              </div>
             </div>
-            <div className="text-xl font-bold font-mono text-indigo-900 tabular-nums">
-              {stats.depositedCount}
-            </div>
-            <div className="text-[11px] text-indigo-700 mt-1 font-medium group-hover:underline">
-              Avec bordereau &rarr;
-            </div>
-          </div>
-
-          {/* 4. En Négociation */}
-          <div
-            onClick={() => onNavigateToOrders('ATTENTE_NEGOCIATION')}
-            className="p-3.5 rounded-lg border border-purple-200 bg-purple-50/60 hover:bg-purple-100/60 transition-colors cursor-pointer group"
-          >
-            <div className="flex items-center justify-between text-purple-800 mb-1">
-              <span className="text-xs font-medium">Attente Cotation</span>
-              <Send className="w-4 h-4 text-purple-600" />
-            </div>
-            <div className="text-xl font-bold font-mono text-purple-900 tabular-nums">
-              {stats.pendingNegotiationCount}
-            </div>
-            <div className="text-[11px] text-purple-700 mt-1 font-medium group-hover:underline">
-              Module 02 &rarr;
+            <div className="mt-1.5 flex flex-col gap-1 text-[10px]">
+              <button
+                type="button"
+                onClick={() => onNavigateToOrders('DEPOSE_BANQUE')}
+                className="text-left text-indigo-700 hover:underline font-semibold flex items-center justify-between"
+              >
+                <span>Déposé à la banque</span>
+                <span className="font-mono">{stats.depositedCount}</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => onNavigateToOrders('EN_ATTENTE_ACHAT_DEVISE')}
+                className="text-left text-purple-700 hover:underline font-semibold flex items-center justify-between"
+              >
+                <span>Attente achat devise</span>
+                <span className="font-mono">{stats.pendingExchangeCount}</span>
+              </button>
             </div>
           </div>
 
-          {/* 5. Exécutés */}
+          {/* 5. Exécuté */}
           <div
             onClick={() => onNavigateToOrders('EXECUTE')}
             className="p-3.5 rounded-lg border border-emerald-200 bg-emerald-50/60 hover:bg-emerald-100/60 transition-colors cursor-pointer group"
           >
             <div className="flex items-center justify-between text-emerald-800 mb-1">
-              <span className="text-xs font-medium">Exécutés (SWIFT)</span>
+              <span className="text-xs font-medium">5. Exécuté</span>
               <CheckCircle2 className="w-4 h-4 text-emerald-600" />
             </div>
             <div className="text-xl font-bold font-mono text-emerald-900 tabular-nums">
@@ -304,23 +318,6 @@ export const DashboardView: React.FC<DashboardViewProps> = ({
             </div>
             <div className="text-[11px] text-emerald-700 mt-1 font-medium group-hover:underline">
               Débits confirmés &rarr;
-            </div>
-          </div>
-
-          {/* 6. Rejetés / Corrections */}
-          <div
-            onClick={() => onNavigateToOrders('REJETE')}
-            className="p-3.5 rounded-lg border border-rose-200 bg-rose-50/60 hover:bg-rose-100/60 transition-colors cursor-pointer group"
-          >
-            <div className="flex items-center justify-between text-rose-800 mb-1">
-              <span className="text-xs font-medium">Rejetés / Anomalies</span>
-              <XCircle className="w-4 h-4 text-rose-600" />
-            </div>
-            <div className="text-xl font-bold font-mono text-rose-900 tabular-nums">
-              {stats.rejectedCount + (stats.countByStatus['RETOURNE_CORRECTION'] || 0)}
-            </div>
-            <div className="text-[11px] text-rose-700 mt-1 font-medium group-hover:underline">
-              Consulter motifs &rarr;
             </div>
           </div>
         </div>

@@ -20,7 +20,7 @@ export const BankDepositModal: React.FC<BankDepositModalProps> = ({
   const [bankId, setBankId] = useState<string>(order.bankId || 'bank_stb');
   const [bankName, setBankName] = useState<string>(order.bankName || 'Société Tunisienne de Banque');
   const [depositDate, setDepositDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [slipNumber, setSlipNumber] = useState<string>(`BORD-${new Date().getFullYear()}-${order.orderNumber.replace('OP-', '')}`);
+  const [slipNumber, setSlipNumber] = useState<string>(`BORD-${new Date().getFullYear()}-${order.orderNumber}`);
   const [bankReference, setBankReference] = useState<string>('');
   const [notes, setNotes] = useState<string>('Dépôt physique du dossier complet avec pièces justificatives visées.');
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -168,8 +168,24 @@ export const BankDepositModal: React.FC<BankDepositModalProps> = ({
             />
           </div>
 
-          <div className="p-3 bg-indigo-50/60 rounded-lg border border-indigo-100 text-[11px] text-indigo-900 leading-relaxed">
-            <strong>Effet automatique :</strong> L'ordre passera immédiatement au statut <strong>DÉPOSÉ À LA BANQUE</strong> et deviendra éligible pour la consultation des cours de change (Module 02).
+          <div
+            className={`p-3 rounded-lg border text-[11px] leading-relaxed ${
+              order.requiresRateNegotiation
+                ? 'bg-purple-50/70 border-purple-200 text-purple-950'
+                : 'bg-indigo-50/60 border-indigo-200 text-indigo-900'
+            }`}
+          >
+            {order.requiresRateNegotiation ? (
+              <>
+                <strong>Effet automatique (Négociation du cours exigée) :</strong> L'ordre passera immédiatement au statut{' '}
+                <strong>En attente d'achat devise</strong> et sera disponible pour la négociation des cotations (Module 02).
+              </>
+            ) : (
+              <>
+                <strong>Effet automatique (Sans négociation exigée) :</strong> L'ordre passera immédiatement au statut{' '}
+                <strong>Déposé à la banque</strong>, prêt pour le suivi d'exécution SWIFT.
+              </>
+            )}
           </div>
         </div>
 

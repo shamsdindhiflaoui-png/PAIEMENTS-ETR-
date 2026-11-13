@@ -4,17 +4,12 @@
  */
 
 export type PaymentStatus =
-  | 'BROUILLON'
   | 'SAISI'
-  | 'TRANSMIS_CG'
-  | 'VALIDE_CG'
-  | 'RETOURNE_CORRECTION'
+  | 'TRANSMIS_SIGNATURE'
+  | 'SIGNE'
   | 'DEPOSE_BANQUE'
-  | 'ATTENTE_NEGOCIATION'
-  | 'TAUX_VALIDE'
-  | 'EN_COURS_EXECUTION'
+  | 'EN_ATTENTE_ACHAT_DEVISE'
   | 'EXECUTE'
-  | 'REJETE'
   | 'ANNULE';
 
 export type UserRole =
@@ -47,6 +42,16 @@ export interface Supplier {
   active: boolean;
 }
 
+export type OrderTransferType = 'VIREMENT' | 'LC' | 'REMISE' | 'AUTRE';
+
+export interface BankConfirmationContact {
+  id?: string;
+  name: string;
+  role?: string;
+  email: string;
+  orderTypes?: OrderTransferType[];
+}
+
 export interface Bank {
   id: string;
   code: string;
@@ -55,6 +60,12 @@ export interface Bank {
   country: string;
   active: boolean;
   contactAgency?: string;
+  tradingDeskName?: string;
+  tradingDeskFax?: string;
+  tradingDeskPhone?: string;
+  tradingDeskAddress?: string;
+  contactEmails?: string[];
+  confirmationContacts?: BankConfirmationContact[];
 }
 
 export type DocumentType =
@@ -107,19 +118,102 @@ export interface BankDeposit {
 export interface ExchangeQuote {
   bankId: string;
   bankName: string;
+  bankCode?: string;
+  isFullAmount?: boolean;
+  proposedAmount?: number;
   rate: number;
-  feesTnd: number;
-  validityMinutes: number;
+  feesTnd?: number;
+  validityMinutes?: number;
   receivedAt: string;
+  notes?: string;
+}
+
+export type ConsultationStatus = 'OUVERTE' | 'CLOTUREE' | 'ANNULEE';
+
+export interface CurrencyConsultation {
+  id: string;
+  consultationNumber: string; // Ex: CONS-2026-0001
+  createdAt: string;
+  createdBy: string;
+  createdById: string;
+  orderIds: string[];
+  orderNumbers: string[];
+  currency: 'EUR' | 'USD' | 'GBP' | 'CHF' | 'CAD' | 'JPY' | 'TND';
+  totalAmount: number;
+  operationDate: string; // YYYY-MM-DD
+  purchaseType: string; // Ex: 'au comptant', 'à terme', etc. (Date valeur)
+  submissionDeadlineTime: string; // Ex: '14h20'
+  validityDeadlineTime: string; // Ex: '14h30'
+  contactPhone?: string;
+  contactEmail?: string;
+  faxNumbers?: string;
+  consultedBankIds?: string[];
+  status: ConsultationStatus;
+  quotes?: ExchangeQuote[];
+  selectedBankId?: string;
+  selectedBankName?: string;
+  negotiatedRate?: number;
+  confirmationRef?: string; // Ex: '101/26', '102/26'
+  confirmationDate?: string; // YYYY-MM-DD
+  valueDate?: string; // YYYY-MM-DD (Date valeur)
+  notes?: string;
+  isDemo: boolean;
+}
+
+export type PurchaseConfirmationRole =
+  | 'SAME_BANK_PURCHASE'
+  | 'DOMICILIARY_BANK'
+  | 'PURCHASE_BANK';
+
+export interface PurchaseConfirmationOrderLine {
+  orderId: string;
+  orderNumber: string;
+  amount: number;
+  currency: string;
+  rate: number;
+  counterValueTnd: number;
+  valueDate: string;
+  transferType?: OrderTransferType;
+  lcNumber?: string;
+  domiciliaryBankId: string;
+  domiciliaryBankCode: string;
+  domiciliaryBankLabel: string;
+  beneficiaryName: string;
+}
+
+export interface PurchaseConfirmationLetter {
+  id: string;
+  role: PurchaseConfirmationRole;
+  title: string;
+  recipientBankId: string;
+  recipientBankCode: string;
+  recipientBankName: string;
+  destLabel: string;
+  addressLabel: string;
+  faxLabel: string;
+  telLabel?: string;
+  confirmationDate: string;
+  confirmationRef: string;
+  valueDate: string;
+  purchaseBankCode: string;
+  purchaseBankName: string;
+  lines: PurchaseConfirmationOrderLine[];
+  totalCounterValueTnd: number;
+  otherDomiciliaryBankLabels?: string[];
+  bctTransferCounterValueTnd?: number;
+  footerEmails: string[];
+  footerContacts?: BankConfirmationContact[];
 }
 
 /**
- * Interface prête pour l'intégration future du MODULE 02
+ * Interface prête pour l'intégration du MODULE 02
  * Consultation banques, cours proposés, cours négociés, économies réalisées
  */
 export interface ExchangeTransaction {
   id: string;
   orderId: string;
+  consultationId?: string;
+  consultationNumber?: string;
   status: 'NON_DEMARRE' | 'CONSULTATION_EN_COURS' | 'NEGOCIE' | 'VALIDE';
   consultationDate?: string;
   quotes?: ExchangeQuote[];
@@ -175,8 +269,11 @@ export interface PaymentOrder {
   remarks?: string;
 
   // Type de transfert : VIREMENT ou LC (avec N° LC / Remise / Autre)
-  transferType?: 'VIREMENT' | 'LC' | 'REMISE' | 'AUTRE';
+  transferType?: OrderTransferType;
   lcNumber?: string; // N° LC ou Remise ou Autre
+
+  // Condition de négociation du cours de change
+  requiresRateNegotiation?: boolean; // Si true -> statut dépôt = EN_ATTENTE_ACHAT_DEVISE, sinon DEPOSE_BANQUE
 
   // Statut & Circuit
   status: PaymentStatus;
@@ -208,7 +305,7 @@ export interface PaymentOrder {
 
 export interface AuditLog {
   id: string;
-  entityType: 'PAYMENT_ORDER' | 'SUPPLIER' | 'BANK' | 'USER' | 'SETTINGS';
+  entityType: 'PAYMENT_ORDER' | 'CONSULTATION' | 'SUPPLIER' | 'BANK' | 'USER' | 'SETTINGS';
   entityId: string;
   entityRef: string;
   action: string;
@@ -239,12 +336,13 @@ export interface DashboardStats {
   totalTndExecuted: number;
   amountByCurrency: Record<string, number>;
   countByStatus: Record<PaymentStatus, number>;
-  pendingValidationCount: number;
-  validatedCount: number;
+  saisiCount: number;
+  transmisSignatureCount: number;
+  signeCount: number;
   depositedCount: number;
-  pendingNegotiationCount: number;
+  pendingExchangeCount: number;
   executedCount: number;
-  rejectedCount: number;
+  cancelledCount: number;
   ordersByBank: Record<string, { count: number; totalTnd: number }>;
   monthlyEvolution: Array<{
     month: string;

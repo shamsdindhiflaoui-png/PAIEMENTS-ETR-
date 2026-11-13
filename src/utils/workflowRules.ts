@@ -1,4 +1,11 @@
-import { PaymentStatus, UserRole } from '../types/payment';
+import {
+  ExchangeQuote,
+  PaymentOrder,
+  PaymentStatus,
+  PaymentWorkflow,
+  User,
+  UserRole,
+} from '../types/payment';
 
 export interface StatusMeta {
   status: PaymentStatus;
@@ -11,86 +18,50 @@ export interface StatusMeta {
 }
 
 export const STATUS_META: Record<PaymentStatus, StatusMeta> = {
-  BROUILLON: {
-    status: 'BROUILLON',
-    label: 'Brouillon',
-    badgeBg: 'bg-slate-100',
-    badgeText: 'text-slate-700',
-    badgeBorder: 'border-slate-200',
-    stepNumber: 1,
-    description: "Ordre de paiement en cours d'élaboration",
-  },
   SAISI: {
     status: 'SAISI',
-    label: 'Saisi définitivement',
-    badgeBg: 'bg-blue-50',
-    badgeText: 'text-blue-700',
-    badgeBorder: 'border-blue-200',
-    stepNumber: 2,
-    description: "Ordre complété et prêt pour transmission au contrôle",
+    label: 'Saisi (Brouillon)',
+    badgeBg: 'bg-slate-100',
+    badgeText: 'text-slate-700',
+    badgeBorder: 'border-slate-300',
+    stepNumber: 1,
+    description: "Ordre en cours de saisie / brouillon enregistré",
   },
-  TRANSMIS_CG: {
-    status: 'TRANSMIS_CG',
-    label: 'Transmis au Contrôle',
+  TRANSMIS_SIGNATURE: {
+    status: 'TRANSMIS_SIGNATURE',
+    label: 'Transmis pour signature',
     badgeBg: 'bg-amber-50',
-    badgeText: 'text-amber-700',
+    badgeText: 'text-amber-800',
     badgeBorder: 'border-amber-200',
-    stepNumber: 3,
-    description: "Dossier soumis pour vérification au Contrôle de Gestion",
+    stepNumber: 2,
+    description: "Ordre soumis à la signature officielle de la direction",
   },
-  VALIDE_CG: {
-    status: 'VALIDE_CG',
-    label: 'Validé par Contrôle de Gestion',
-    badgeBg: 'bg-emerald-50',
-    badgeText: 'text-emerald-700',
-    badgeBorder: 'border-emerald-200',
-    stepNumber: 4,
-    description: "Conformité budgétaire et pièces justificatives validées",
-  },
-  RETOURNE_CORRECTION: {
-    status: 'RETOURNE_CORRECTION',
-    label: 'Retourné pour correction',
-    badgeBg: 'bg-orange-50',
-    badgeText: 'text-orange-700',
-    badgeBorder: 'border-orange-200',
+  SIGNE: {
+    status: 'SIGNE',
+    label: 'Signé',
+    badgeBg: 'bg-blue-50',
+    badgeText: 'text-blue-800',
+    badgeBorder: 'border-blue-200',
     stepNumber: 3,
-    description: "Anomalie ou pièce manquante signalée par le Contrôle de Gestion",
+    description: "Ordre signé et autorisé pour le dépôt bancaire",
   },
   DEPOSE_BANQUE: {
     status: 'DEPOSE_BANQUE',
-    label: 'Déposé à la Banque',
+    label: 'Déposé à la banque',
     badgeBg: 'bg-indigo-50',
-    badgeText: 'text-indigo-700',
+    badgeText: 'text-indigo-800',
     badgeBorder: 'border-indigo-200',
-    stepNumber: 5,
-    description: "Dossier remis physiquement à la banque tunisienne avec bordereau",
+    stepNumber: 4,
+    description: "Dossier déposé à la banque (négociation de cours non exigée)",
   },
-  ATTENTE_NEGOCIATION: {
-    status: 'ATTENTE_NEGOCIATION',
-    label: 'Attente Négociation Change',
+  EN_ATTENTE_ACHAT_DEVISE: {
+    status: 'EN_ATTENTE_ACHAT_DEVISE',
+    label: "En attente d'achat devise",
     badgeBg: 'bg-purple-50',
-    badgeText: 'text-purple-700',
+    badgeText: 'text-purple-800',
     badgeBorder: 'border-purple-200',
-    stepNumber: 6,
-    description: "En attente de consultation des cotations (Module 02)",
-  },
-  TAUX_VALIDE: {
-    status: 'TAUX_VALIDE',
-    label: 'Taux de Change Validé',
-    badgeBg: 'bg-teal-50',
-    badgeText: 'text-teal-700',
-    badgeBorder: 'border-teal-200',
-    stepNumber: 7,
-    description: "Cotation bancaire fixée et validée par la DFC",
-  },
-  EN_COURS_EXECUTION: {
-    status: 'EN_COURS_EXECUTION',
-    label: 'En Cours d’Exécution',
-    badgeBg: 'bg-cyan-50',
-    badgeText: 'text-cyan-700',
-    badgeBorder: 'border-cyan-200',
-    stepNumber: 8,
-    description: "Ordre de transfert en traitement au niveau de la salle des marchés et back-office",
+    stepNumber: 4,
+    description: "Déposé à la banque : en attente de négociation du cours et d'achat de devise",
   },
   EXECUTE: {
     status: 'EXECUTE',
@@ -98,50 +69,201 @@ export const STATUS_META: Record<PaymentStatus, StatusMeta> = {
     badgeBg: 'bg-emerald-100',
     badgeText: 'text-emerald-800',
     badgeBorder: 'border-emerald-300',
-    stepNumber: 9,
-    description: "Transfert SWIFT émis avec succès et compte bancaire débité",
-  },
-  REJETE: {
-    status: 'REJETE',
-    label: 'Rejeté',
-    badgeBg: 'bg-rose-50',
-    badgeText: 'text-rose-700',
-    badgeBorder: 'border-rose-200',
-    stepNumber: 0,
-    description: "Ordre rejeté définitivement avec motif documenté",
+    stepNumber: 5,
+    description: "Transfert SWIFT exécuté avec succès et compte débité",
   },
   ANNULE: {
     status: 'ANNULE',
     label: 'Annulé',
-    badgeBg: 'bg-slate-200',
-    badgeText: 'text-slate-700',
-    badgeBorder: 'border-slate-300',
+    badgeBg: 'bg-rose-50',
+    badgeText: 'text-rose-700',
+    badgeBorder: 'border-rose-200',
     stepNumber: 0,
     description: "Ordre annulé administrativement par la DFC",
   },
 };
 
 export const ALLOWED_TRANSITIONS: Record<PaymentStatus, PaymentStatus[]> = {
-  BROUILLON: ['SAISI', 'TRANSMIS_CG', 'ANNULE'],
-  SAISI: ['TRANSMIS_CG', 'BROUILLON', 'ANNULE'],
-  TRANSMIS_CG: ['VALIDE_CG', 'RETOURNE_CORRECTION', 'REJETE', 'ANNULE'],
-  RETOURNE_CORRECTION: ['SAISI', 'TRANSMIS_CG', 'ANNULE'],
-  VALIDE_CG: ['DEPOSE_BANQUE', 'ANNULE'],
-  DEPOSE_BANQUE: ['ATTENTE_NEGOCIATION', 'TAUX_VALIDE', 'EN_COURS_EXECUTION', 'ANNULE'],
-  ATTENTE_NEGOCIATION: ['TAUX_VALIDE', 'EN_COURS_EXECUTION', 'ANNULE'],
-  TAUX_VALIDE: ['EN_COURS_EXECUTION', 'EXECUTE', 'ANNULE'],
-  EN_COURS_EXECUTION: ['EXECUTE', 'REJETE', 'ANNULE'],
-  EXECUTE: [], // Statut final
-  REJETE: [],  // Statut final
-  ANNULE: [],  // Statut final
+  SAISI: ['TRANSMIS_SIGNATURE', 'ANNULE'],
+  TRANSMIS_SIGNATURE: ['SIGNE', 'SAISI', 'ANNULE'],
+  SIGNE: ['DEPOSE_BANQUE', 'EN_ATTENTE_ACHAT_DEVISE', 'SAISI', 'ANNULE'],
+  DEPOSE_BANQUE: ['EXECUTE', 'ANNULE'],
+  EN_ATTENTE_ACHAT_DEVISE: ['DEPOSE_BANQUE', 'EXECUTE', 'ANNULE'],
+  EXECUTE: [],
+  ANNULE: [],
 };
+
+/**
+ * Détermine automatiquement le statut de l'étape 4 (Dépôt bancaire)
+ * selon la case à cocher "Négociation du cours exigée".
+ */
+export function getDepositTargetStatus(requiresRateNegotiation?: boolean): PaymentStatus {
+  return requiresRateNegotiation ? 'EN_ATTENTE_ACHAT_DEVISE' : 'DEPOSE_BANQUE';
+}
+
+export interface ConsultationUpdateForOrder {
+  consultationId: string;
+  consultationNumber: string;
+  confirmationRef?: string;
+  confirmationDate?: string;
+  valueDate?: string;
+  selectedBankId?: string;
+  selectedBankName?: string;
+  negotiatedRate?: number;
+  quotes: ExchangeQuote[];
+  closed: boolean;
+  notes?: string;
+  timestamp: string;
+  user: Pick<User, 'id' | 'name' | 'role'>;
+}
+
+/**
+ * Répercute les cotations ou la clôture d'une consultation de change sur un ordre de paiement :
+ * - Met à jour exchangeTransaction et finalExchangeRate
+ * - Lors de la clôture (closed = true), fait évoluer l'ordre de EN_ATTENTE_ACHAT_DEVISE
+ *   vers DEPOSE_BANQUE (devise achetée et confirmée, prêt pour exécution SWIFT) et journalise l'historique.
+ */
+export function applyConsultationUpdateToOrder(
+  order: PaymentOrder,
+  update: ConsultationUpdateForOrder
+): {
+  order: PaymentOrder;
+  statusChanged: boolean;
+  workflowEntry?: PaymentWorkflow;
+} {
+  const quotes = Array.isArray(update.quotes) ? update.quotes : [];
+  const negotiatedRate =
+    update.negotiatedRate && update.negotiatedRate > 0
+      ? Number(update.negotiatedRate)
+      : undefined;
+
+  let computedSavingsTnd: number | undefined = order.exchangeTransaction?.savingsTnd;
+  if (update.closed && negotiatedRate && quotes.length > 1) {
+    const highestQuotedRate = Math.max(...quotes.map(q => Number(q.rate) || 0));
+    if (highestQuotedRate > negotiatedRate) {
+      computedSavingsTnd = Number(((highestQuotedRate - negotiatedRate) * order.amount).toFixed(3));
+    }
+  }
+
+  const exchangeNoteParts: string[] = [];
+  if (update.closed && update.confirmationRef) {
+    exchangeNoteParts.push(`Confirmation d'achat ${update.confirmationRef}`);
+  }
+  if (update.closed && update.valueDate) {
+    exchangeNoteParts.push(`Date valeur ${update.valueDate}`);
+  }
+  if (update.notes && update.notes.trim()) {
+    exchangeNoteParts.push(update.notes.trim());
+  }
+
+  const shouldTransitionStatus =
+    update.closed && order.status === 'EN_ATTENTE_ACHAT_DEVISE';
+
+  let workflowEntry: PaymentWorkflow | undefined;
+  if (shouldTransitionStatus) {
+    const rateLabel = negotiatedRate ? `${negotiatedRate.toFixed(4)} TND` : '—';
+    const bankLabel = update.selectedBankName || 'la banque retenue';
+    const refLabel = update.confirmationRef ? ` (Confirmation ${update.confirmationRef})` : '';
+    workflowEntry = {
+      id: `wf_cons_${Date.now()}_${order.id}`,
+      orderId: order.id,
+      fromStatus: 'EN_ATTENTE_ACHAT_DEVISE',
+      toStatus: 'DEPOSE_BANQUE',
+      timestamp: update.timestamp,
+      userId: update.user.id,
+      userName: update.user.name,
+      userRole: update.user.role,
+      comment: `Achat de devise confirmé via consultation ${update.consultationNumber}${refLabel} : ${bankLabel} au cours de ${rateLabel}. Prêt pour exécution SWIFT.`,
+    };
+  }
+
+  const updatedOrder: PaymentOrder = {
+    ...order,
+    status: shouldTransitionStatus ? 'DEPOSE_BANQUE' : order.status,
+    updatedAt: update.timestamp,
+    finalExchangeRate: negotiatedRate || order.finalExchangeRate,
+    history: workflowEntry ? [...(order.history || []), workflowEntry] : order.history,
+    exchangeTransaction: {
+      ...(order.exchangeTransaction || { id: 'ex_' + order.id, orderId: order.id }),
+      consultationId: update.consultationId,
+      consultationNumber: update.consultationNumber,
+      consultationDate:
+        update.confirmationDate || order.exchangeTransaction?.consultationDate,
+      status: update.closed
+        ? 'VALIDE'
+        : quotes.length > 0
+        ? 'NEGOCIE'
+        : 'CONSULTATION_EN_COURS',
+      quotes,
+      selectedBankId: update.selectedBankId ?? order.exchangeTransaction?.selectedBankId,
+      selectedBankName:
+        update.selectedBankName ?? order.exchangeTransaction?.selectedBankName,
+      finalNegotiatedRate:
+        negotiatedRate ?? order.exchangeTransaction?.finalNegotiatedRate,
+      savingsTnd: computedSavingsTnd,
+      validatedAt: update.closed
+        ? update.timestamp
+        : order.exchangeTransaction?.validatedAt,
+      validatedBy: update.closed
+        ? update.user.name
+        : order.exchangeTransaction?.validatedBy,
+      notes:
+        exchangeNoteParts.length > 0
+          ? exchangeNoteParts.join(' · ')
+          : order.exchangeTransaction?.notes,
+    },
+  };
+
+  return {
+    order: updatedOrder,
+    statusChanged: shouldTransitionStatus,
+    workflowEntry,
+  };
+}
+
+/**
+ * Convertit d'éventuels anciens statuts stockés sur disque vers le nouveau circuit à 5 statuts.
+ */
+export function normalizeLegacyStatus(
+  status: string,
+  requiresRateNegotiation?: boolean,
+  isExchangeValidated?: boolean
+): PaymentStatus {
+  switch (status) {
+    case 'SAISI':
+    case 'BROUILLON':
+    case 'RETOURNE_CORRECTION':
+      return 'SAISI';
+    case 'TRANSMIS_SIGNATURE':
+    case 'TRANSMIS_CG':
+      return 'TRANSMIS_SIGNATURE';
+    case 'SIGNE':
+    case 'VALIDE_CG':
+      return 'SIGNE';
+    case 'DEPOSE_BANQUE':
+      return requiresRateNegotiation && !isExchangeValidated
+        ? 'EN_ATTENTE_ACHAT_DEVISE'
+        : 'DEPOSE_BANQUE';
+    case 'EN_ATTENTE_ACHAT_DEVISE':
+    case 'ATTENTE_NEGOCIATION':
+    case 'TAUX_VALIDE':
+    case 'EN_COURS_EXECUTION':
+      return 'EN_ATTENTE_ACHAT_DEVISE';
+    case 'EXECUTE':
+      return 'EXECUTE';
+    case 'ANNULE':
+    case 'REJETE':
+      return 'ANNULE';
+    default:
+      return 'SAISI';
+  }
+}
 
 export function canUserPerformTransition(
   fromStatus: PaymentStatus,
   toStatus: PaymentStatus,
   role: UserRole
 ): { allowed: boolean; reason?: string } {
-  // L'administrateur a tous les droits
   if (role === 'ADMINISTRATEUR') {
     if (ALLOWED_TRANSITIONS[fromStatus]?.includes(toStatus)) {
       return { allowed: true };
@@ -149,59 +271,68 @@ export function canUserPerformTransition(
     return { allowed: false, reason: `Transition non autorisée du statut ${fromStatus} vers ${toStatus}` };
   }
 
-  // Contrôler la validité du graphe de transition
   if (!ALLOWED_TRANSITIONS[fromStatus]?.includes(toStatus)) {
     return {
       allowed: false,
-      reason: `Transition invalide selon le circuit de validation MTK : ${STATUS_META[fromStatus].label} -> ${STATUS_META[toStatus].label}`,
+      reason: `Transition invalide selon le circuit MTK : ${STATUS_META[fromStatus]?.label || fromStatus} -> ${STATUS_META[toStatus]?.label || toStatus}`,
     };
   }
 
-  // Contrôle de Gestion spécifique
-  if (toStatus === 'VALIDE_CG' || toStatus === 'RETOURNE_CORRECTION' || (fromStatus === 'TRANSMIS_CG' && toStatus === 'REJETE')) {
-    if (role !== 'CONTROLE_GESTION') {
-      return {
-        allowed: false,
-        reason: 'Seul le Contrôle de Gestion est habilité à valider, rejeter ou retourner un ordre pour correction.',
-      };
-    }
-    return { allowed: true };
-  }
-
-  // Saisie et transmission
-  if (toStatus === 'TRANSMIS_CG' || toStatus === 'SAISI' || toStatus === 'BROUILLON') {
+  // Transmission pour signature ou retour en Saisi (Brouillon)
+  if (toStatus === 'TRANSMIS_SIGNATURE') {
     if (role !== 'AGENT_FINANCIER' && role !== 'RESPONSABLE_FINANCIER') {
       return {
         allowed: false,
-        reason: 'Rôle insuffisant pour modifier ou transmettre la saisie de l’ordre.',
+        reason: 'Rôle insuffisant pour transmettre l’ordre pour signature.',
       };
     }
     return { allowed: true };
   }
 
-  // Dépôt bancaire
-  if (toStatus === 'DEPOSE_BANQUE') {
-    if (fromStatus !== 'VALIDE_CG') {
+  if (toStatus === 'SAISI') {
+    if (role !== 'CONTROLE_GESTION' && role !== 'RESPONSABLE_FINANCIER' && role !== 'AGENT_FINANCIER') {
       return {
         allowed: false,
-        reason: 'Un ordre doit impérativement être validé par le Contrôle de Gestion avant d’être déposé à la banque.',
+        reason: 'Rôle insuffisant pour retourner l’ordre en brouillon (Saisi).',
+      };
+    }
+    return { allowed: true };
+  }
+
+  // Signature de l'ordre (Statut 3 : Signé)
+  if (toStatus === 'SIGNE') {
+    if (role !== 'RESPONSABLE_FINANCIER' && role !== 'CONTROLE_GESTION') {
+      return {
+        allowed: false,
+        reason: 'Seul le Responsable Financier ou le Contrôle de Gestion est habilité à signer l’ordre.',
+      };
+    }
+    return { allowed: true };
+  }
+
+  // Dépôt bancaire / En attente d'achat devise (Statut 4)
+  if (toStatus === 'DEPOSE_BANQUE' || toStatus === 'EN_ATTENTE_ACHAT_DEVISE') {
+    if (fromStatus !== 'SIGNE') {
+      return {
+        allowed: false,
+        reason: 'Un ordre doit impérativement être au statut « Signé » avant d’être déposé à la banque.',
       };
     }
     if (role !== 'AGENT_FINANCIER' && role !== 'RESPONSABLE_FINANCIER') {
       return {
         allowed: false,
-        reason: 'Seuls les agents financiers et responsables peuvent attester du dépôt bancaire.',
+        reason: 'Seuls les agents financiers et responsables peuvent enregistrer le dépôt bancaire.',
       };
     }
     return { allowed: true };
   }
 
-  // Exécution et clôture
+  // Exécution et clôture (Statut 5 : Exécuté)
   if (toStatus === 'EXECUTE') {
     if (role !== 'RESPONSABLE_FINANCIER') {
       return {
         allowed: false,
-        reason: 'Seul le Responsable Financier peut valider la clôture et la bonne exécution du transfert.',
+        reason: 'Seul le Responsable Financier peut valider la clôture et l’exécution du transfert.',
       };
     }
     return { allowed: true };
@@ -212,7 +343,7 @@ export function canUserPerformTransition(
     if (role !== 'RESPONSABLE_FINANCIER') {
       return {
         allowed: false,
-        reason: 'L’annulation administrative d’un ordre de paiement requiert l’autorisation du Responsable Financier.',
+        reason: 'L’annulation administrative d’un ordre requiert l’autorisation du Responsable Financier.',
       };
     }
     return { allowed: true };

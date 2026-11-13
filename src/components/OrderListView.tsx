@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Search,
   Filter,
@@ -28,6 +28,7 @@ interface OrderListViewProps {
   onSelectOrder: (orderId: string) => void;
   onPrintOrder: (order: PaymentOrder) => void;
   onNewOrder: () => void;
+  onRefresh?: () => Promise<void> | void;
 }
 
 type SortField = 'createdAt' | 'orderNumber' | 'beneficiaryName' | 'amount' | 'status';
@@ -42,12 +43,14 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
   onSelectOrder,
   onPrintOrder,
   onNewOrder,
+  onRefresh,
 }) => {
   const [sortField, setSortField] = useState<SortField>('createdAt');
   const [sortOrder, setSortOrder] = useState<SortOrder>('desc');
   const [pageSize, setPageSize] = useState<number>(10);
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
+  const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
 
   // Sorting
   const sortedOrders = useMemo(() => {
@@ -70,10 +73,26 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
 
   // Pagination
   const totalPages = Math.ceil(sortedOrders.length / pageSize) || 1;
+  useEffect(() => {
+    if (currentPage > totalPages) {
+      setCurrentPage(totalPages);
+    }
+  }, [currentPage, totalPages]);
+
   const paginatedOrders = useMemo(() => {
     const start = (currentPage - 1) * pageSize;
     return sortedOrders.slice(start, start + pageSize);
   }, [sortedOrders, currentPage, pageSize]);
+
+  const handleManualRefresh = async () => {
+    if (!onRefresh || isRefreshing) return;
+    try {
+      setIsRefreshing(true);
+      await onRefresh();
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
 
   const handleSort = (field: SortField) => {
     if (sortField === field) {
@@ -127,18 +146,17 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
               className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-1.5 focus:outline-none text-slate-800 font-medium"
             >
               <option value="ALL">Tous les statuts ({orders.length})</option>
-              <option value="TRANSMIS_CG">Transmis au CG</option>
-              <option value="VALIDE_CG">Validés CG</option>
-              <option value="DEPOSE_BANQUE">Déposés Banque</option>
-              <option value="ATTENTE_NEGOCIATION">Attente Cotation</option>
-              <option value="EXECUTE">Exécutés (SWIFT)</option>
-              <option value="RETOURNE_CORRECTION">Retourné correction</option>
-              <option value="REJETE">Rejetés</option>
-              <option value="SAISI">Saisis</option>
-              <option value="BROUILLON">Brouillons</option>
+              <option value="SAISI">1. Saisi (Brouillon)</option>
+              <option value="TRANSMIS_SIGNATURE">2. Transmis pour signature</option>
+              <option value="SIGNE">3. Signé</option>
+              <option value="DEPOSE_BANQUE">4a. Déposé à la banque</option>
+              <option value="EN_ATTENTE_ACHAT_DEVISE">4b. En attente d'achat devise</option>
+              <option value="EXECUTE">5. Exécuté</option>
+              <option value="ANNULE">Annulé</option>
             </select>
 
             <button
+              type="button"
               onClick={() => setShowAdvancedFilters(!showAdvancedFilters)}
               className={`flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border transition-colors whitespace-nowrap ${
                 showAdvancedFilters
@@ -149,6 +167,19 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
               <Filter className="w-3.5 h-3.5" />
               <span>Filtres avancés</span>
             </button>
+
+            {onRefresh && (
+              <button
+                type="button"
+                onClick={handleManualRefresh}
+                disabled={isRefreshing}
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-lg border border-slate-200 bg-white text-slate-600 hover:bg-slate-50 hover:text-blue-700 transition-colors whitespace-nowrap disabled:opacity-60"
+                title="Actualiser la liste des ordres"
+              >
+                <RefreshCw className={`w-3.5 h-3.5 ${isRefreshing ? 'animate-spin' : ''}`} />
+                <span>Actualiser</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -228,57 +259,57 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
               <tr>
                 <th
                   onClick={() => handleSort('orderNumber')}
-                  className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                  className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                 >
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1">
                     <span>N° d'Ordre</span>
                     {renderSortIcon('orderNumber')}
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('createdAt')}
-                  className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                  className="py-3 px-2.5 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                 >
-                  <div className="flex items-center gap-1.5">
-                    <span>Date création</span>
+                  <div className="flex items-center gap-1">
+                    <span>Date</span>
                     {renderSortIcon('createdAt')}
                   </div>
                 </th>
                 <th
                   onClick={() => handleSort('beneficiaryName')}
-                  className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                  className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                 >
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1">
                     <span>Bénéficiaire / Fournisseur</span>
                     {renderSortIcon('beneficiaryName')}
                   </div>
                 </th>
-                <th className="py-3 px-3 whitespace-nowrap">Pays</th>
+                <th className="py-3 px-2.5 whitespace-nowrap">Pays</th>
                 <th
                   onClick={() => handleSort('amount')}
-                  className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
+                  className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors text-right whitespace-nowrap"
                 >
-                  <div className="flex items-center justify-end gap-1.5">
-                    <span>Montant Devise</span>
+                  <div className="flex items-center justify-end gap-1">
+                    <span>Montant</span>
                     {renderSortIcon('amount')}
                   </div>
                 </th>
-                <th className="py-3 px-4 whitespace-nowrap">Banque MTK</th>
+                <th className="py-3 px-3 whitespace-nowrap">Banque MTK</th>
                 <th
                   onClick={() => handleSort('status')}
-                  className="py-3 px-4 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
+                  className="py-3 px-3 cursor-pointer hover:bg-slate-100 transition-colors whitespace-nowrap"
                 >
-                  <div className="flex items-center gap-1.5">
+                  <div className="flex items-center gap-1">
                     <span>Statut du circuit</span>
                     {renderSortIcon('status')}
                   </div>
                 </th>
-                <th className="py-3 px-4 text-center whitespace-nowrap">Actions</th>
+                <th className="py-3 px-2.5 text-center whitespace-nowrap">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {paginatedOrders.map(order => {
-                const meta = STATUS_META[order.status] || STATUS_META.BROUILLON;
+                const meta = STATUS_META[order.status] || STATUS_META.SAISI;
                 return (
                   <tr
                     key={order.id}
@@ -286,8 +317,8 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
                     className="hover:bg-blue-50/40 transition-colors cursor-pointer group"
                   >
                     {/* Order Number */}
-                    <td className="py-3 px-4 font-mono font-bold text-blue-700 whitespace-nowrap">
-                      <div className="flex items-center gap-2">
+                    <td className="py-3 px-3 font-mono font-bold text-blue-700 whitespace-nowrap">
+                      <div className="flex items-center gap-1.5">
                         <span>{order.orderNumber}</span>
                         {order.isDemo && (
                           <span
@@ -301,12 +332,12 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
                     </td>
 
                     {/* Date */}
-                    <td className="py-3 px-4 text-slate-600 whitespace-nowrap font-mono">
+                    <td className="py-3 px-2.5 text-slate-600 whitespace-nowrap font-mono text-[11px]">
                       {order.createdAt.split('T')[0]}
                     </td>
 
                     {/* Beneficiary */}
-                    <td className="py-3 px-4 max-w-[220px]">
+                    <td className="py-3 px-3 max-w-[180px]">
                       <div className="font-semibold text-slate-900 truncate">
                         {order.beneficiaryName}
                       </div>
@@ -316,39 +347,76 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
                     </td>
 
                     {/* Country */}
-                    <td className="py-3 px-3 text-slate-600 whitespace-nowrap text-[11px]">
+                    <td className="py-3 px-2.5 text-slate-600 whitespace-nowrap text-[11px]">
                       {order.beneficiaryCountry || '—'}
                     </td>
 
                     {/* Amount & Currency */}
-                    <td className="py-3 px-4 text-right font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
+                    <td className="py-3 px-3 text-right font-mono font-bold text-slate-900 tabular-nums whitespace-nowrap">
                       <div>{formatForeignCurrency(order.amount, order.currency)}</div>
                       <div className="text-[10px] text-slate-400 font-normal">
-                        Facture {order.invoiceNumber || '—'}
+                        {order.invoiceNumber || '—'}
                       </div>
                     </td>
 
                     {/* Local Bank & Transfer Type */}
-                    <td className="py-3 px-4 text-slate-700 whitespace-nowrap">
-                      <div className="truncate max-w-[160px] font-medium">{order.bankName}</div>
-                      <div className="text-[10px] text-blue-800 font-mono truncate font-medium">
+                    <td className="py-3 px-3 text-slate-700 whitespace-nowrap">
+                      <div className="truncate max-w-[135px] font-medium">{order.bankName}</div>
+                      <div className="text-[10px] text-blue-800 font-mono truncate max-w-[135px] font-medium">
                         {order.transferType || 'VIREMENT'} {order.contractNumber ? `· ${order.contractNumber}` : ''}
                       </div>
                     </td>
 
                     {/* Status Badge */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span
-                        className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${meta.badgeBg} ${meta.badgeText} ${meta.badgeBorder}`}
-                      >
-                        <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80" />
-                        <span>{meta.label}</span>
-                      </span>
+                    <td className="py-3 px-3 whitespace-nowrap">
+                      <div className="flex flex-col items-start gap-1">
+                        <span
+                          className={`inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${meta.badgeBg} ${meta.badgeText} ${meta.badgeBorder}`}
+                        >
+                          <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80" />
+                          <span>{meta.label}</span>
+                        </span>
+                        {order.exchangeTransaction?.status === 'VALIDE' ? (
+                          <span
+                            className="text-[10px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-1.5 py-0.5 rounded"
+                            title={
+                              order.exchangeTransaction.notes ||
+                              order.exchangeTransaction.selectedBankName ||
+                              undefined
+                            }
+                          >
+                            Devise achetée ·{' '}
+                            {(
+                              order.finalExchangeRate ||
+                              order.exchangeTransaction.finalNegotiatedRate ||
+                              0
+                            ).toFixed(4)}{' '}
+                            TND
+                            {order.exchangeTransaction.consultationNumber
+                              ? ` · ${order.exchangeTransaction.consultationNumber}`
+                              : ''}
+                          </span>
+                        ) : order.exchangeTransaction?.status === 'CONSULTATION_EN_COURS' ||
+                          order.exchangeTransaction?.status === 'NEGOCIE' ? (
+                          <span className="text-[10px] font-semibold text-blue-700 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
+                            Consultation {order.exchangeTransaction.consultationNumber || ''} en cours
+                          </span>
+                        ) : (
+                          order.requiresRateNegotiation &&
+                          order.status !== 'EN_ATTENTE_ACHAT_DEVISE' &&
+                          order.status !== 'EXECUTE' &&
+                          order.status !== 'ANNULE' && (
+                            <span className="text-[10px] text-purple-700 font-medium pl-1">
+                              Négociation cours exigée
+                            </span>
+                          )
+                        )}
+                      </div>
                     </td>
 
                     {/* Actions */}
-                    <td className="py-3 px-4 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
-                      <div className="flex items-center justify-center gap-1.5">
+                    <td className="py-3 px-2.5 text-center whitespace-nowrap" onClick={e => e.stopPropagation()}>
+                      <div className="flex items-center justify-center gap-1">
                         <button
                           type="button"
                           onClick={() => onSelectOrder(order.id)}

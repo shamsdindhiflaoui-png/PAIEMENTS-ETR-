@@ -17,9 +17,14 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
   onSubmit,
 }) => {
   const [executionDate, setExecutionDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [executingBank, setExecutingBank] = useState<string>(order.bankName || 'Société Tunisienne de Banque');
+  const [executingBank, setExecutingBank] = useState<string>(
+    order.exchangeTransaction?.selectedBankName || order.bankName || 'Société Tunisienne de Banque'
+  );
   const [executedAmount, setExecutedAmount] = useState<number>(order.amount);
-  const defaultRate = order.currency === 'USD' ? 3.1200 : order.currency === 'EUR' ? 3.3350 : 3.2000;
+  const defaultRate =
+    order.finalExchangeRate ||
+    order.exchangeTransaction?.finalNegotiatedRate ||
+    (order.currency === 'USD' ? 3.1200 : order.currency === 'EUR' ? 3.3350 : 3.2000);
   const [finalExchangeRate, setFinalExchangeRate] = useState<string>(String(defaultRate));
   const [accountDebitDate, setAccountDebitDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [swiftReference, setSwiftReference] = useState<string>(`SWIFT-MT103-${order.orderNumber.replace('OP-', '')}`);

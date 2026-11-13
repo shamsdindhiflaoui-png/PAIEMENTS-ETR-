@@ -8,6 +8,8 @@ import {
   FilterParams,
   PaymentStatus,
   BankDeposit,
+  CurrencyConsultation,
+  ExchangeQuote,
 } from '../types/payment';
 
 class ApiService {
@@ -92,6 +94,19 @@ class ApiService {
     return res.json();
   }
 
+  public async updateBank(id: string, bank: Partial<Bank>): Promise<Bank> {
+    const res = await fetch(`/api/banks/${id}`, {
+      method: 'PUT',
+      headers: this.getHeaders(),
+      body: JSON.stringify(bank),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur mise à jour banque');
+    }
+    return res.json();
+  }
+
   public async getOrders(filters: FilterParams = {}): Promise<PaymentOrder[]> {
     const params = new URLSearchParams();
     if (filters.status && filters.status !== 'ALL') params.set('status', filters.status);
@@ -104,13 +119,19 @@ class ApiService {
     if (filters.searchQuery) params.set('searchQuery', filters.searchQuery);
     if (filters.isDemo !== undefined && filters.isDemo !== 'ALL') params.set('isDemo', String(filters.isDemo));
 
-    const res = await fetch(`/api/orders?${params.toString()}`, { headers: this.getHeaders() });
+    const res = await fetch(`/api/orders?${params.toString()}`, {
+      cache: 'no-store',
+      headers: this.getHeaders(),
+    });
     if (!res.ok) throw new Error('Erreur chargement des ordres de paiement');
     return res.json();
   }
 
   public async getOrderById(id: string): Promise<PaymentOrder> {
-    const res = await fetch(`/api/orders/${id}`, { headers: this.getHeaders() });
+    const res = await fetch(`/api/orders/${id}`, {
+      cache: 'no-store',
+      headers: this.getHeaders(),
+    });
     if (!res.ok) throw new Error('Ordre introuvable');
     return res.json();
   }
@@ -209,13 +230,91 @@ class ApiService {
     if (filters.endDate) params.set('endDate', filters.endDate);
     if (filters.isDemo !== undefined && filters.isDemo !== 'ALL') params.set('isDemo', String(filters.isDemo));
 
-    const res = await fetch(`/api/stats?${params.toString()}`, { headers: this.getHeaders() });
+    const res = await fetch(`/api/stats?${params.toString()}`, {
+      cache: 'no-store',
+      headers: this.getHeaders(),
+    });
     if (!res.ok) throw new Error('Erreur chargement statistiques');
     return res.json();
   }
 
+  public async getConsultations(): Promise<CurrencyConsultation[]> {
+    const res = await fetch('/api/consultations', {
+      cache: 'no-store',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) throw new Error('Erreur chargement des consultations de change');
+    return res.json();
+  }
+
+  public async createConsultation(payload: {
+    orderIds: string[];
+    operationDate: string;
+    purchaseType: string;
+    submissionDeadlineTime: string;
+    validityDeadlineTime: string;
+    contactPhone?: string;
+    contactEmail?: string;
+    faxNumbers?: string;
+    consultedBankIds?: string[];
+    notes?: string;
+  }): Promise<CurrencyConsultation> {
+    const res = await fetch('/api/consultations', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la création de la consultation');
+    }
+    return res.json();
+  }
+
+  public async recordConsultationQuotes(
+    consultationId: string,
+    payload: {
+      quotes?: ExchangeQuote[];
+      selectedBankId?: string;
+      selectedBankName?: string;
+      negotiatedRate?: number;
+      confirmationRef?: string;
+      confirmationDate?: string;
+      valueDate?: string;
+      close?: boolean;
+      notes?: string;
+    }
+  ): Promise<CurrencyConsultation> {
+    const res = await fetch(`/api/consultations/${consultationId}/quotes`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur enregistrement des cotations');
+    }
+    return res.json();
+  }
+
+  public async cancelConsultation(consultationId: string, reason: string): Promise<CurrencyConsultation> {
+    const res = await fetch(`/api/consultations/${consultationId}/cancel`, {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify({ reason }),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur annulation consultation');
+    }
+    return res.json();
+  }
+
   public async getAuditLogs(): Promise<AuditLog[]> {
-    const res = await fetch('/api/audit-logs', { headers: this.getHeaders() });
+    const res = await fetch('/api/audit-logs', {
+      cache: 'no-store',
+      headers: this.getHeaders(),
+    });
     if (!res.ok) throw new Error('Erreur chargement journal d’audit');
     return res.json();
   }

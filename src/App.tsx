@@ -11,6 +11,10 @@ import { SettingsView } from './components/SettingsView';
 import { BankDepositModal } from './components/BankDepositModal';
 import { ExecutionModal } from './components/ExecutionModal';
 import { PrintOfficialOrderModal } from './components/PrintOfficialOrderModal';
+import { ConsultationsView } from './components/ConsultationsView';
+import { ConsultationDetailView } from './components/ConsultationDetailView';
+import { ConsultationPdfModal } from './components/ConsultationPdfModal';
+import { PurchaseConfirmationPdfModal } from './components/PurchaseConfirmationPdfModal';
 import { api } from './services/api';
 import {
   PaymentOrder,
@@ -22,12 +26,16 @@ import {
   PaymentStatus,
   BankDeposit,
   AuditLog,
+  CurrencyConsultation,
+  ExchangeQuote,
 } from './types/payment';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { STATUS_META } from './utils/workflowRules';
 
 export default function App() {
-  const [activeView, setActiveView] = useState<NavItem | 'order_detail'>('dashboard');
+  const [activeView, setActiveView] = useState<NavItem | 'order_detail' | 'consultation_detail'>('dashboard');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
+  const [selectedConsultationId, setSelectedConsultationId] = useState<string | null>(null);
 
   // Core Data State
   const [orders, setOrders] = useState<PaymentOrder[]>([]);
@@ -37,6 +45,7 @@ export default function App() {
   const [currentUser, setCurrentUser] = useState<User>(api.getCurrentUser());
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
+  const [consultations, setConsultations] = useState<CurrencyConsultation[]>([]);
 
   // Filtering
   const [showDemoData, setShowDemoData] = useState<boolean>(true);
@@ -53,6 +62,11 @@ export default function App() {
   const [depositModalOrder, setDepositModalOrder] = useState<PaymentOrder | null>(null);
   const [executionModalOrder, setExecutionModalOrder] = useState<PaymentOrder | null>(null);
   const [printModalOrder, setPrintModalOrder] = useState<PaymentOrder | null>(null);
+  const [pdfModalConsultation, setPdfModalConsultation] = useState<CurrencyConsultation | null>(null);
+  const [confirmationModalState, setConfirmationModalState] = useState<{
+    consultation: CurrencyConsultation;
+    initialTab?: 'recap' | number;
+  } | null>(null);
 
   // Toast Notification
   const [toast, setToast] = useState<{ type: 'success' | 'error' | 'info'; message: string } | null>(null);
@@ -72,13 +86,14 @@ export default function App() {
         isDemo: showDemoData ? 'ALL' : false,
       };
 
-      const [ordersRes, statsRes, banksRes, suppliersRes, usersRes, logsRes] = await Promise.all([
+      const [ordersRes, statsRes, banksRes, suppliersRes, usersRes, logsRes, consultationsRes] = await Promise.all([
         api.getOrders(activeFilters),
         api.getDashboardStats(activeFilters),
         api.getBanks(),
         api.getSuppliers(),
         api.getUsers(),
         api.getAuditLogs(),
+        api.getConsultations(),
       ]);
 
       setOrders(ordersRes);
@@ -87,6 +102,9 @@ export default function App() {
       setSuppliers(suppliersRes);
       setUsers(usersRes);
       setAuditLogs(logsRes);
+      setConsultations(
+        showDemoData ? consultationsRes : consultationsRes.filter(c => !c.isDemo)
+      );
     } catch (err: any) {
       console.error('Error fetching data:', err);
       showToast('error', err.message || 'Erreur lors du chargement des données');
@@ -124,8 +142,8 @@ export default function App() {
   const handleStatusChange = async (targetStatus: PaymentStatus, comment: string) => {
     if (!selectedOrderId) return;
     try {
-      const updated = await api.changeOrderStatus(selectedOrderId, targetStatus, comment);
-      showToast('success', `Statut mis à jour : ${targetStatus}`);
+      await api.changeOrderStatus(selectedOrderId, targetStatus, comment);
+      showToast('success', `Statut mis à jour : ${STATUS_META[targetStatus]?.label || targetStatus}`);
       await loadAllData();
     } catch (err: any) {
       showToast('error', err.message || 'Erreur transition de statut');
@@ -136,18 +154,18 @@ export default function App() {
   // Review Decision from Pending Review View
   const handleReviewDecision = async (
     order: PaymentOrder,
-    decision: 'VALIDE_CG' | 'RETOURNE_CORRECTION' | 'REJETE',
+    decision: 'SIGNE' | 'SAISI' | 'ANNULE',
     comment: string
   ) => {
     try {
       await api.changeOrderStatus(order.id, decision, comment);
       const label =
-        decision === 'VALIDE_CG'
-          ? 'validé'
-          : decision === 'RETOURNE_CORRECTION'
-          ? 'retourné pour correction'
-          : 'rejeté';
-      showToast('success', `Ordre ${order.orderNumber} ${label} par le Contrôle de Gestion`);
+        decision === 'SIGNE'
+          ? 'signé et prêt pour dépôt bancaire'
+          : decision === 'SAISI'
+          ? 'retourné en Saisi (Brouillon)'
+          : 'annulé';
+      showToast('success', `Ordre ${order.orderNumber} ${label}`);
       await loadAllData();
     } catch (err: any) {
       showToast('error', err.message || 'Erreur décision');
@@ -212,6 +230,19 @@ export default function App() {
       await loadAllData();
     } catch (err: any) {
       showToast('error', err.message || 'Erreur ajout banque');
+      throw err;
+    }
+  };
+
+  // Update Bank
+  const handleUpdateBank = async (id: string, bank: Partial<Bank>) => {
+    try {
+      const updated = await api.updateBank(id, bank);
+      showToast('success', `Banque ${updated.name} mise à jour avec succès`);
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur mise à jour banque');
+      throw err;
     }
   };
 
@@ -226,22 +257,114 @@ export default function App() {
     }
   };
 
-  // Current selected order
-  const selectedOrder = orders.find(o => o.id === selectedOrderId);
+  // Module 02 Consultations Handlers
+  const handleCreateConsultation = async (payload: {
+    orderIds: string[];
+    operationDate: string;
+    purchaseType: string;
+    submissionDeadlineTime: string;
+    validityDeadlineTime: string;
+    contactPhone?: string;
+    contactEmail?: string;
+    faxNumbers?: string;
+    consultedBankIds?: string[];
+    notes?: string;
+  }) => {
+    try {
+      const created = await api.createConsultation(payload);
+      showToast('success', `Consultation ${created.consultationNumber} créée — document PDF prêt`);
+      await loadAllData();
+      setSelectedConsultationId(created.id);
+      setActiveView('consultation_detail');
+      setPdfModalConsultation(created);
+      return created;
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la création de la consultation');
+      throw err;
+    }
+  };
 
-  // Pending count for sidebar badge (Contrôle de Gestion + Dépôts)
-  const pendingCount = orders.filter(o => o.status === 'TRANSMIS_CG').length;
+  const handleRecordConsultationQuotes = async (
+    consultationId: string,
+    payload: {
+      quotes?: ExchangeQuote[];
+      selectedBankId?: string;
+      selectedBankName?: string;
+      negotiatedRate?: number;
+      confirmationRef?: string;
+      confirmationDate?: string;
+      valueDate?: string;
+      close?: boolean;
+      notes?: string;
+    }
+  ) => {
+    try {
+      const updated = await api.recordConsultationQuotes(consultationId, payload);
+      showToast(
+        'success',
+        payload.close
+          ? `Consultation ${updated.consultationNumber} clôturée — confirmation(s) générée(s) et liste des ordres actualisée`
+          : `Cotations enregistrées pour ${updated.consultationNumber}`
+      );
+      await loadAllData();
+      if (payload.close && updated.status === 'CLOTUREE') {
+        setConfirmationModalState({ consultation: updated, initialTab: 0 });
+      }
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de l’enregistrement des cotations');
+      throw err;
+    }
+  };
+
+  const handleCancelConsultation = async (consultationId: string, reason: string) => {
+    try {
+      const updated = await api.cancelConsultation(consultationId, reason);
+      showToast('info', `Consultation ${updated.consultationNumber} annulée`);
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de l’annulation');
+      throw err;
+    }
+  };
+
+  // Current selected order / consultation
+  const selectedOrder = orders.find(o => o.id === selectedOrderId);
+  const selectedConsultation = consultations.find(c => c.id === selectedConsultationId);
+
+  // Pending count for sidebar badge (Transmis pour signature + Signés à déposer)
+  const pendingCount = orders.filter(
+    o => o.status === 'TRANSMIS_SIGNATURE' || o.status === 'SIGNE'
+  ).length;
+
+  // Orders awaiting currency purchase consultation that are not yet attached to an active consultation
+  const activeConsultedOrderIds = new Set(
+    consultations
+      .filter(c => c.status !== 'ANNULEE')
+      .flatMap(c => c.orderIds)
+  );
+  const consultationPendingCount = orders.filter(
+    o => o.status === 'EN_ATTENTE_ACHAT_DEVISE' && !activeConsultedOrderIds.has(o.id)
+  ).length;
+
+  const sidebarActiveView: NavItem =
+    activeView === 'order_detail'
+      ? 'orders_list'
+      : activeView === 'consultation_detail'
+      ? 'consultations'
+      : activeView;
 
   return (
     <div className="flex h-screen bg-slate-100 overflow-hidden text-slate-900 font-sans">
       {/* Sidebar Navigation */}
       <Sidebar
-        activeView={activeView === 'order_detail' ? 'orders_list' : activeView}
+        activeView={sidebarActiveView}
         onNavigate={view => {
           setSelectedOrderId(null);
+          setSelectedConsultationId(null);
           setActiveView(view);
         }}
         pendingCount={pendingCount}
+        consultationPendingCount={consultationPendingCount}
         currentUser={currentUser}
         onUserChange={handleUserChange}
         users={users}
@@ -251,16 +374,23 @@ export default function App() {
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
         {/* Top Header */}
         <Header
-          activeView={activeView === 'order_detail' ? 'orders_list' : activeView}
+          activeView={sidebarActiveView}
           onNavigate={view => {
             setSelectedOrderId(null);
+            setSelectedConsultationId(null);
             setActiveView(view);
           }}
           currentUser={currentUser}
           showDemoData={showDemoData}
           onToggleDemoData={val => setShowDemoData(val)}
           onResetDemo={handleResetDemo}
-          selectedOrderNumber={activeView === 'order_detail' && selectedOrder ? selectedOrder.orderNumber : undefined}
+          selectedOrderNumber={
+            activeView === 'order_detail' && selectedOrder
+              ? selectedOrder.orderNumber
+              : activeView === 'consultation_detail' && selectedConsultation
+              ? selectedConsultation.consultationNumber
+              : undefined
+          }
         />
 
         {/* Viewport Scroll Container */}
@@ -317,6 +447,7 @@ export default function App() {
               }}
               onPrintOrder={order => setPrintModalOrder(order)}
               onNewOrder={() => setActiveView('new_order')}
+              onRefresh={loadAllData}
             />
           )}
 
@@ -332,9 +463,6 @@ export default function App() {
               onStatusChange={handleStatusChange}
               onOpenDepositModal={() => setDepositModalOrder(selectedOrder)}
               onOpenExecutionModal={() => setExecutionModalOrder(selectedOrder)}
-              onOpenReviewModal={() => {
-                setActiveView('pending_review');
-              }}
               onPrintOrder={() => setPrintModalOrder(selectedOrder)}
               onAddDocument={handleAddDocument}
             />
@@ -354,6 +482,62 @@ export default function App() {
             />
           )}
 
+          {/* 5b. Module 02 - Consultations pour achat de devises */}
+          {activeView === 'consultations' && (
+            <ConsultationsView
+              orders={orders}
+              consultations={consultations}
+              banks={banks}
+              currentUser={currentUser}
+              onCreateConsultation={handleCreateConsultation}
+              onRecordQuotes={handleRecordConsultationQuotes}
+              onCancelConsultation={handleCancelConsultation}
+              onOpenPdfModal={consultation => setPdfModalConsultation(consultation)}
+              onOpenConfirmationModal={(consultation, initialTab) =>
+                setConfirmationModalState({ consultation, initialTab })
+              }
+              onSelectOrder={id => {
+                setSelectedOrderId(id);
+                setActiveView('order_detail');
+              }}
+              onSelectConsultation={id => {
+                setSelectedConsultationId(id);
+                setActiveView('consultation_detail');
+              }}
+            />
+          )}
+
+          {/* 5c. Module 02 - Détail Consultation & Classement Moins-Disant / Plus-Disant */}
+          {activeView === 'consultation_detail' && selectedConsultation && (
+            <ConsultationDetailView
+              consultation={selectedConsultation}
+              orders={orders}
+              consultations={consultations}
+              banks={banks}
+              onBack={() => {
+                setSelectedConsultationId(null);
+                setActiveView('consultations');
+              }}
+              onOpenPdfModal={consultation => setPdfModalConsultation(consultation)}
+              onOpenConfirmationModal={(consultation, initialTab) =>
+                setConfirmationModalState({ consultation, initialTab })
+              }
+              onSelectOrder={id => {
+                setSelectedOrderId(id);
+                setActiveView('order_detail');
+              }}
+              onNavigateToOrders={() => {
+                if (filters.status === 'EN_ATTENTE_ACHAT_DEVISE') {
+                  setFilters(prev => ({ ...prev, status: 'ALL' }));
+                }
+                setSelectedConsultationId(null);
+                setActiveView('orders_list');
+              }}
+              onRecordQuotes={handleRecordConsultationQuotes}
+              onCancelConsultation={handleCancelConsultation}
+            />
+          )}
+
           {/* 6. Audit Logs View */}
           {activeView === 'audit_logs' && <AuditLogsView logs={auditLogs} />}
 
@@ -365,6 +549,7 @@ export default function App() {
               users={users}
               onAddSupplier={handleAddSupplier}
               onAddBank={handleAddBank}
+              onUpdateBank={handleUpdateBank}
               onResetDemo={handleResetDemo}
             />
           )}
@@ -399,6 +584,25 @@ export default function App() {
         <PrintOfficialOrderModal
           order={printModalOrder}
           onClose={() => setPrintModalOrder(null)}
+        />
+      )}
+
+      {/* Module 02 Consultation PDF Preview & Download Modal */}
+      {pdfModalConsultation && (
+        <ConsultationPdfModal
+          consultation={pdfModalConsultation}
+          onClose={() => setPdfModalConsultation(null)}
+        />
+      )}
+
+      {/* Module 02 Purchase Confirmation(s) + Récap PDF Modal */}
+      {confirmationModalState && (
+        <PurchaseConfirmationPdfModal
+          consultation={confirmationModalState.consultation}
+          orders={orders}
+          banks={banks}
+          initialTab={confirmationModalState.initialTab}
+          onClose={() => setConfirmationModalState(null)}
         />
       )}
 

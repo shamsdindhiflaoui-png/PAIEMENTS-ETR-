@@ -77,6 +77,7 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
   const [bankFileRef, setBankFileRef] = useState<string>('');
   const [transferType, setTransferType] = useState<'VIREMENT' | 'LC' | 'REMISE' | 'AUTRE'>('VIREMENT');
   const [lcNumber, setLcNumber] = useState<string>('');
+  const [requiresRateNegotiation, setRequiresRateNegotiation] = useState<boolean>(false);
   const [remarks, setRemarks] = useState<string>('');
 
   // Documents
@@ -154,7 +155,7 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
     setDocuments(prev => prev.filter((_, i) => i !== index));
   };
 
-  const handleSubmit = async (targetStatus: 'BROUILLON' | 'SAISI' | 'TRANSMIS_CG') => {
+  const handleSubmit = async (targetStatus: 'SAISI' | 'TRANSMIS_SIGNATURE') => {
     setErrorMsg(null);
 
     // Basic Validations
@@ -195,6 +196,7 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
         contractNumber: contractNumber.trim(),
         transferType,
         lcNumber: transferType !== 'VIREMENT' ? lcNumber.trim() : undefined,
+        requiresRateNegotiation,
         purpose,
         supplierId: selectedSupplierId || undefined,
         beneficiaryName,
@@ -634,6 +636,45 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
               </div>
             )}
           </div>
+
+          {/* Condition négociation du cours exigée -> détermine statut étape 4 */}
+          <div className="pt-3 border-t border-slate-200/80">
+            <label
+              htmlFor="requiresRateNegotiation"
+              className="flex items-start gap-3 p-3 rounded-lg bg-white border border-slate-200 hover:border-blue-300 cursor-pointer transition-colors"
+            >
+              <input
+                id="requiresRateNegotiation"
+                type="checkbox"
+                checked={requiresRateNegotiation}
+                onChange={e => setRequiresRateNegotiation(e.target.checked)}
+                className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-700 focus:ring-blue-600 cursor-pointer"
+              />
+              <div className="flex-1">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <span className="text-xs font-bold text-slate-900">
+                    Négociation du cours de change exigée (achat de devises)
+                  </span>
+                  <span
+                    className={`text-[11px] font-semibold px-2 py-0.5 rounded border ${
+                      requiresRateNegotiation
+                        ? 'bg-purple-50 text-purple-800 border-purple-200'
+                        : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                    }`}
+                  >
+                    {requiresRateNegotiation
+                      ? "Statut au dépôt : En attente d'achat devise"
+                      : 'Statut au dépôt : Déposé à la banque'}
+                  </span>
+                </div>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Si coché, après le dépôt bancaire, l’ordre passera au statut{' '}
+                  <strong className="text-purple-800">« En attente d’achat devise »</strong>. Sinon, il prendra le statut{' '}
+                  <strong className="text-indigo-800">« Déposé à la banque »</strong>.
+                </p>
+              </div>
+            </label>
+          </div>
         </div>
 
         <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
@@ -800,37 +841,26 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
         </button>
 
         <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
-          {/* Option 1: Brouillon */}
-          <button
-            type="button"
-            disabled={isSubmitting}
-            onClick={() => handleSubmit('BROUILLON')}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-2xs"
-          >
-            <Save className="w-4 h-4 text-slate-500" />
-            <span>Enregistrer en Brouillon</span>
-          </button>
-
-          {/* Option 2: Saisi définitivement */}
+          {/* Option 1: Saisi (Brouillon) */}
           <button
             type="button"
             disabled={isSubmitting}
             onClick={() => handleSubmit('SAISI')}
-            className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-blue-900 bg-blue-100 border border-blue-200 rounded-lg hover:bg-blue-200 transition-colors shadow-2xs"
+            className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-4 py-2.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-2xs"
           >
-            <FileCheck className="w-4 h-4 text-blue-700" />
-            <span>Enregistrer (Statut Saisi)</span>
+            <Save className="w-4 h-4 text-slate-500" />
+            <span>Enregistrer : Saisi (Brouillon)</span>
           </button>
 
-          {/* Option 3: Transmettre direct Contrôle de Gestion */}
+          {/* Option 2: Transmettre pour signature */}
           <button
             type="button"
             disabled={isSubmitting}
-            onClick={() => handleSubmit('TRANSMIS_CG')}
+            onClick={() => handleSubmit('TRANSMIS_SIGNATURE')}
             className="w-full sm:w-auto inline-flex items-center justify-center gap-1.5 px-5 py-2.5 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors shadow-xs"
           >
             <Send className="w-4 h-4" />
-            <span>Transmettre au Contrôle de Gestion</span>
+            <span>Transmettre pour signature</span>
           </button>
         </div>
       </div>
