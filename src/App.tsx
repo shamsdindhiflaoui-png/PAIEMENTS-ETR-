@@ -15,6 +15,7 @@ import { ConsultationsView } from './components/ConsultationsView';
 import { ConsultationDetailView } from './components/ConsultationDetailView';
 import { ConsultationPdfModal } from './components/ConsultationPdfModal';
 import { PurchaseConfirmationPdfModal } from './components/PurchaseConfirmationPdfModal';
+import { InvoicesView } from './components/InvoicesView';
 import { api } from './services/api';
 import {
   PaymentOrder,
@@ -28,16 +29,20 @@ import {
   AuditLog,
   CurrencyConsultation,
   ExchangeQuote,
+  Invoice,
 } from './types/payment';
 import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
 import { STATUS_META } from './utils/workflowRules';
+import { getAvailableInvoicesForOrder } from './utils/invoiceUtils';
 
 export default function App() {
   const [activeView, setActiveView] = useState<NavItem | 'order_detail' | 'consultation_detail'>('dashboard');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedConsultationId, setSelectedConsultationId] = useState<string | null>(null);
+  const [preselectedInvoiceId, setPreselectedInvoiceId] = useState<string | null>(null);
 
   // Core Data State
+  const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [orders, setOrders] = useState<PaymentOrder[]>([]);
   const [banks, setBanks] = useState<Bank[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -86,7 +91,8 @@ export default function App() {
         isDemo: showDemoData ? 'ALL' : false,
       };
 
-      const [ordersRes, statsRes, banksRes, suppliersRes, usersRes, logsRes, consultationsRes] = await Promise.all([
+      const [invoicesRes, ordersRes, statsRes, banksRes, suppliersRes, usersRes, logsRes, consultationsRes] = await Promise.all([
+        api.getInvoices(showDemoData ? 'ALL' : false),
         api.getOrders(activeFilters),
         api.getDashboardStats(activeFilters),
         api.getBanks(),
@@ -96,6 +102,7 @@ export default function App() {
         api.getConsultations(),
       ]);
 
+      setInvoices(invoicesRes);
       setOrders(ordersRes);
       setStats(statsRes);
       setBanks(banksRes);
@@ -124,11 +131,43 @@ export default function App() {
     showToast('info', `Connecté en tant que ${user.name} (${user.role})`);
   };
 
+  // Module 00 Factures Handlers
+  const handleCreateInvoice = async (payload: Partial<Invoice>) => {
+    try {
+      const created = await api.createInvoice(payload);
+      showToast('success', `Facture ${created.invoiceNumber} enregistrée avec succès`);
+      await loadAllData();
+      return created;
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la création de la facture');
+      throw err;
+    }
+  };
+
+  const handleDeleteInvoice = async (id: string) => {
+    try {
+      await api.deleteInvoice(id);
+      showToast('info', 'Facture supprimée avec succès');
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la suppression de la facture');
+      throw err;
+    }
+  };
+
+  const handleCreateOrderFromInvoice = (invoiceId: string) => {
+    setPreselectedInvoiceId(invoiceId);
+    setSelectedOrderId(null);
+    setSelectedConsultationId(null);
+    setActiveView('new_order');
+  };
+
   // Create Order
   const handleCreateOrder = async (orderData: Partial<PaymentOrder>) => {
     try {
       const created = await api.createOrder(orderData);
       showToast('success', `Ordre de paiement ${created.orderNumber} créé avec succès`);
+      setPreselectedInvoiceId(null);
       await loadAllData();
       setSelectedOrderId(created.id);
       setActiveView('order_detail');
@@ -346,6 +385,8 @@ export default function App() {
     o => o.status === 'EN_ATTENTE_ACHAT_DEVISE' && !activeConsultedOrderIds.has(o.id)
   ).length;
 
+  const unpaidInvoicesCount = getAvailableInvoicesForOrder(invoices, orders).length;
+
   const sidebarActiveView: NavItem =
     activeView === 'order_detail'
       ? 'orders_list'
@@ -361,9 +402,11 @@ export default function App() {
         onNavigate={view => {
           setSelectedOrderId(null);
           setSelectedConsultationId(null);
+          if (view !== 'new_order') setPreselectedInvoiceId(null);
           setActiveView(view);
         }}
         pendingCount={pendingCount}
+        unpaidInvoicesCount={unpaidInvoicesCount}
         consultationPendingCount={consultationPendingCount}
         currentUser={currentUser}
         onUserChange={handleUserChange}
@@ -378,6 +421,7 @@ export default function App() {
           onNavigate={view => {
             setSelectedOrderId(null);
             setSelectedConsultationId(null);
+            if (view !== 'new_order') setPreselectedInvoiceId(null);
             setActiveView(view);
           }}
           currentUser={currentUser}
@@ -421,15 +465,38 @@ export default function App() {
             />
           )}
 
+          {/* 1b. Module 00 - Factures View */}
+          {activeView === 'invoices' && (
+            <InvoicesView
+              invoices={invoices}
+              orders={orders}
+              suppliers={suppliers}
+              currentUser={currentUser}
+              onCreateInvoice={handleCreateInvoice}
+              onDeleteInvoice={handleDeleteInvoice}
+              onCreateOrderFromInvoice={handleCreateOrderFromInvoice}
+              onSelectOrder={id => {
+                setSelectedOrderId(id);
+                setActiveView('order_detail');
+              }}
+            />
+          )}
+
           {/* 2. New Order View */}
           {activeView === 'new_order' && (
             <NewOrderView
               suppliers={suppliers}
               banks={banks}
+              invoices={invoices}
+              orders={orders}
+              initialInvoiceId={preselectedInvoiceId}
               currentUser={currentUser}
               existingCount={orders.length}
               onSubmit={handleCreateOrder}
-              onCancel={() => setActiveView('orders_list')}
+              onCancel={() => {
+                setPreselectedInvoiceId(null);
+                setActiveView('orders_list');
+              }}
             />
           )}
 
@@ -455,6 +522,7 @@ export default function App() {
           {activeView === 'order_detail' && selectedOrder && (
             <OrderDetailView
               order={selectedOrder}
+              consultations={consultations}
               currentUser={currentUser}
               onBack={() => {
                 setSelectedOrderId(null);
@@ -463,6 +531,15 @@ export default function App() {
               onStatusChange={handleStatusChange}
               onOpenDepositModal={() => setDepositModalOrder(selectedOrder)}
               onOpenExecutionModal={() => setExecutionModalOrder(selectedOrder)}
+              onOpenConsultations={consultationId => {
+                setSelectedOrderId(null);
+                if (consultationId) {
+                  setSelectedConsultationId(consultationId);
+                  setActiveView('consultation_detail');
+                } else {
+                  setActiveView('consultations');
+                }
+              }}
               onPrintOrder={() => setPrintModalOrder(selectedOrder)}
               onAddDocument={handleAddDocument}
             />
@@ -573,6 +650,7 @@ export default function App() {
       {executionModalOrder && (
         <ExecutionModal
           order={executionModalOrder}
+          consultations={consultations}
           currentUser={currentUser}
           onClose={() => setExecutionModalOrder(null)}
           onSubmit={handleRecordExecution}

@@ -89,6 +89,33 @@ export interface PaymentDocument {
   dataBase64?: string;
 }
 
+export type InvoicePaymentStatus = 'NON_PAYEE' | 'PARTIELLEMENT_PAYEE' | 'PAYEE';
+
+export interface Invoice {
+  id: string;
+  invoiceNumber: string;
+  invoiceDate: string;
+  dueDate?: string;
+  contractNumber?: string;
+  purpose: string;
+  operationNature: string;
+  supplierId?: string;
+  supplierName: string;
+  supplierCountry: string;
+  supplierAddress: string;
+  supplierBank: string;
+  supplierIban: string;
+  supplierSwift: string;
+  currency: 'EUR' | 'USD' | 'GBP' | 'CHF' | 'CAD' | 'JPY' | 'TND';
+  totalAmount: number;
+  notes?: string;
+  documents?: Array<Omit<PaymentDocument, 'id' | 'orderId'> & { id?: string }>;
+  createdAt: string;
+  createdBy: string;
+  createdById: string;
+  isDemo: boolean;
+}
+
 export interface PaymentWorkflow {
   id: string;
   orderId: string;
@@ -252,6 +279,7 @@ export interface PaymentOrder {
   beneficiarySwift: string;
 
   // Données financières
+  invoiceId?: string; // Référence vers la facture source (Module Factures)
   currency: 'EUR' | 'USD' | 'GBP' | 'CHF' | 'CAD' | 'JPY' | 'TND';
   amount: number;
   amountInWords: string;
@@ -305,7 +333,7 @@ export interface PaymentOrder {
 
 export interface AuditLog {
   id: string;
-  entityType: 'PAYMENT_ORDER' | 'CONSULTATION' | 'SUPPLIER' | 'BANK' | 'USER' | 'SETTINGS';
+  entityType: 'INVOICE' | 'PAYMENT_ORDER' | 'CONSULTATION' | 'SUPPLIER' | 'BANK' | 'USER' | 'SETTINGS';
   entityId: string;
   entityRef: string;
   action: string;

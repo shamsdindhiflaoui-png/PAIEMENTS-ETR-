@@ -27,11 +27,11 @@ export const PrintOfficialOrderModal: React.FC<PrintOfficialOrderModalProps> = (
   return (
     <div
       onClick={onClose}
-      className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto"
+      className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-start justify-center p-4 overflow-y-auto"
     >
       <div
         onClick={e => e.stopPropagation()}
-        className="bg-white rounded-xl max-w-3xl w-full my-8 shadow-2xl overflow-hidden border border-slate-200"
+        className="bg-white rounded-xl max-w-3xl w-full my-auto shadow-2xl overflow-hidden border border-slate-200"
       >
         {/* Top Control Bar (hidden on print) */}
         <div className="no-print p-4 bg-slate-900 text-white flex items-center justify-between">
@@ -61,19 +61,26 @@ export const PrintOfficialOrderModal: React.FC<PrintOfficialOrderModalProps> = (
         {/* PRINTABLE PAGE CONTENT */}
         <div className="p-8 sm:p-12 text-slate-900 space-y-6 print:p-0 print:m-0 bg-white">
           {/* Header */}
-          <div className="flex items-start justify-between pb-4 border-b-2 border-slate-900">
-            <div>
-              <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
-                RÉPUBLIQUE TUNISIENNE
-              </div>
-              <h1 className="text-base font-extrabold uppercase tracking-tight text-slate-950 mt-0.5">
-                Manufacture des Tabacs de Kairouan (MTK)
-              </h1>
-              <div className="text-xs font-semibold text-blue-900 mt-0.5">
-                Direction Financière et Comptable · Service Règlements Extérieurs
-              </div>
-              <div className="text-[10px] text-slate-500 font-mono mt-0.5">
-                Route de Mansoura, B.P. 106 - 3100 Kairouan · MF : 0012345/P/A/M/000
+          <div className="flex items-start justify-between pb-4 border-b-2 border-slate-900 gap-4">
+            <div className="flex items-start gap-3.5">
+              <img
+                src="/assets/aistudio/Logo_MTK_737e87ca.png"
+                alt="Logo MTK"
+                className="w-14 h-14 object-contain shrink-0"
+              />
+              <div>
+                <div className="text-[11px] font-bold uppercase tracking-wider text-slate-700">
+                  RÉPUBLIQUE TUNISIENNE
+                </div>
+                <h1 className="text-base font-extrabold uppercase tracking-tight text-slate-950 mt-0.5">
+                  Manufacture des Tabacs de Kairouan (MTK)
+                </h1>
+                <div className="text-xs font-semibold text-blue-900 mt-0.5">
+                  Direction Financière et Comptable · Service Règlements Extérieurs
+                </div>
+                <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                  Route de Mansoura, B.P. 106 - 3100 Kairouan · MF : 0012345/P/A/M/000
+                </div>
               </div>
             </div>
 

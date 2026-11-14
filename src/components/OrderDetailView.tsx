@@ -22,27 +22,42 @@ import {
   DollarSign,
   Ban,
 } from 'lucide-react';
-import { PaymentOrder, User, PaymentStatus, DocumentType } from '../types/payment';
-import { STATUS_META, formatForeignCurrency, formatTndCurrency } from '../utils/workflowRules';
+import {
+  CurrencyConsultation,
+  PaymentOrder,
+  User,
+  PaymentStatus,
+  DocumentType,
+} from '../types/payment';
+import {
+  STATUS_META,
+  canExecuteOrder,
+  formatForeignCurrency,
+  formatTndCurrency,
+} from '../utils/workflowRules';
 
 interface OrderDetailViewProps {
   order: PaymentOrder;
+  consultations?: CurrencyConsultation[];
   currentUser: User;
   onBack: () => void;
   onStatusChange: (targetStatus: PaymentStatus, comment: string) => Promise<void>;
   onOpenDepositModal: () => void;
   onOpenExecutionModal: () => void;
+  onOpenConsultations?: (consultationId?: string) => void;
   onPrintOrder: () => void;
   onAddDocument: (doc: any) => Promise<void>;
 }
 
 export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
   order,
+  consultations = [],
   currentUser,
   onBack,
   onStatusChange,
   onOpenDepositModal,
   onOpenExecutionModal,
+  onOpenConsultations,
   onPrintOrder,
   onAddDocument,
 }) => {
@@ -51,6 +66,7 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
   const [cancelReason, setCancelReason] = useState<string>('');
   const [uploadDocType, setUploadDocType] = useState<DocumentType>('AUTRE');
 
+  const execCheck = canExecuteOrder(order, consultations);
   const meta = STATUS_META[order.status] || STATUS_META.SAISI;
   const currentStep = meta.stepNumber;
   const stage4Label =
@@ -106,18 +122,18 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
           >
             <ArrowLeft className="w-5 h-5" />
           </button>
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-base font-bold font-mono text-blue-700">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-base font-bold font-mono text-blue-700 whitespace-nowrap">
                 {order.orderNumber}
               </span>
               {order.isDemo && (
-                <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200">
+                <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200 whitespace-nowrap">
                   DONNÉE DE DÉMO
                 </span>
               )}
               <span
-                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border ${meta.badgeBg} ${meta.badgeText} ${meta.badgeBorder}`}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-xs font-semibold border whitespace-nowrap ${meta.badgeBg} ${meta.badgeText} ${meta.badgeBorder}`}
               >
                 <span className="w-1.5 h-1.5 rounded-full bg-current opacity-80" />
                 <span>{meta.label}</span>
@@ -193,7 +209,7 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
           )}
 
           {/* Action 4: Record Transfer Execution */}
-          {(order.status === 'DEPOSE_BANQUE' || order.status === 'EN_ATTENTE_ACHAT_DEVISE') && (
+          {execCheck.allowed && (
             <button
               onClick={onOpenExecutionModal}
               className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg transition-colors shadow-xs"
@@ -202,6 +218,36 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
               <span>Enregistrer Exécution SWIFT</span>
             </button>
           )}
+
+          {!execCheck.allowed &&
+            (order.status === 'EN_ATTENTE_ACHAT_DEVISE' ||
+              (order.status === 'DEPOSE_BANQUE' && order.requiresRateNegotiation)) && (
+              <>
+                <button
+                  type="button"
+                  disabled
+                  title={execCheck.reason}
+                  className="inline-flex items-center gap-1.5 px-3.5 py-1.5 text-xs font-semibold text-purple-800 bg-purple-50 border border-purple-200 rounded-lg cursor-not-allowed"
+                >
+                  <Lock className="w-3.5 h-3.5" />
+                  <span>Exécution bloquée (Consultation requise)</span>
+                </button>
+                {onOpenConsultations && (
+                  <button
+                    type="button"
+                    onClick={() => onOpenConsultations(execCheck.openConsultationId)}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-blue-700 bg-blue-50 hover:bg-blue-100 border border-blue-200 rounded-lg transition-colors whitespace-nowrap"
+                  >
+                    <DollarSign className="w-3.5 h-3.5" />
+                    <span>
+                      {execCheck.openConsultationNumber
+                        ? `Clôturer ${execCheck.openConsultationNumber}`
+                        : 'Aller aux Consultations'}
+                    </span>
+                  </button>
+                )}
+              </>
+            )}
 
           {/* Action 5: Administrative Cancellation (Traceable, non-destructive) */}
           {order.status !== 'EXECUTE' && order.status !== 'ANNULE' && (
@@ -286,6 +332,25 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
             })}
           </div>
         )}
+        {!execCheck.allowed &&
+          (order.status === 'EN_ATTENTE_ACHAT_DEVISE' ||
+            (order.status === 'DEPOSE_BANQUE' && order.requiresRateNegotiation)) && (
+            <div className="mt-3 p-3 rounded-lg bg-purple-50 border border-purple-200 text-xs text-purple-900 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-purple-700 shrink-0" />
+                <span>{execCheck.reason}</span>
+              </div>
+              {onOpenConsultations && (
+                <button
+                  type="button"
+                  onClick={() => onOpenConsultations(execCheck.openConsultationId)}
+                  className="px-3 py-1 rounded-md bg-purple-700 hover:bg-purple-800 text-white font-semibold text-[11px] whitespace-nowrap self-start sm:self-auto"
+                >
+                  Ouvrir Consultations de change
+                </button>
+              )}
+            </div>
+          )}
       </div>
 
       {/* 6 Tabs Navigation Header */}
@@ -794,17 +859,28 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                     </div>
                   </div>
                 ) : (
-                  <div className="text-xs text-slate-500 py-3 flex items-center justify-between">
+                  <div className="text-xs text-slate-500 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                     <span>
-                      Les informations de dénouement (message SWIFT, cours négocié et commissions) seront renseignées lors de la clôture.
+                      {execCheck.allowed
+                        ? 'Les informations de dénouement (message SWIFT, cours négocié et commissions) seront renseignées lors de la clôture.'
+                        : execCheck.reason ||
+                          'Les informations de dénouement seront renseignées après dépôt bancaire et clôture éventuelle de la consultation.'}
                     </span>
-                    {(order.status === 'DEPOSE_BANQUE' || order.status === 'EN_ATTENTE_ACHAT_DEVISE') && (
+                    {execCheck.allowed ? (
                       <button
                         onClick={onOpenExecutionModal}
-                        className="px-3 py-1 bg-emerald-600 text-white rounded text-xs font-semibold hover:bg-emerald-700"
+                        className="px-3 py-1.5 bg-emerald-600 text-white rounded-lg text-xs font-semibold hover:bg-emerald-700 whitespace-nowrap"
                       >
                         Saisir exécution
                       </button>
+                    ) : (
+                      (order.status === 'EN_ATTENTE_ACHAT_DEVISE' ||
+                        (order.status === 'DEPOSE_BANQUE' && order.requiresRateNegotiation)) && (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-purple-50 border border-purple-200 text-purple-800 font-semibold whitespace-nowrap">
+                          <Lock className="w-3.5 h-3.5" />
+                          <span>En attente clôture consultation</span>
+                        </span>
+                      )
                     )}
                   </div>
                 )}

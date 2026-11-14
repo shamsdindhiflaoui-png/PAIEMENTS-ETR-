@@ -2,12 +2,13 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   applyConsultationUpdateToOrder,
+  canExecuteOrder,
   canUserPerformTransition,
   generateStructuredOrderNumber,
   getDepositTargetStatus,
   normalizeLegacyStatus,
 } from './workflowRules';
-import type { PaymentOrder } from '../types/payment';
+import type { CurrencyConsultation, PaymentOrder } from '../types/payment';
 
 test('getDepositTargetStatus returns EN_ATTENTE_ACHAT_DEVISE when negotiation is required', () => {
   assert.equal(getDepositTargetStatus(true), 'EN_ATTENTE_ACHAT_DEVISE');
@@ -40,15 +41,16 @@ test('allows Agent Financier to deposit signed order to DEPOSE_BANQUE or EN_ATTE
   assert.equal(canUserPerformTransition('SIGNE', 'EN_ATTENTE_ACHAT_DEVISE', 'AGENT_FINANCIER').allowed, true);
 });
 
-test('allows Responsable Financier to execute from DEPOSE_BANQUE or EN_ATTENTE_ACHAT_DEVISE', () => {
+test('allows Responsable Financier to execute from DEPOSE_BANQUE but blocks direct execution from EN_ATTENTE_ACHAT_DEVISE', () => {
   assert.equal(canUserPerformTransition('DEPOSE_BANQUE', 'EXECUTE', 'RESPONSABLE_FINANCIER').allowed, true);
-  assert.equal(canUserPerformTransition('EN_ATTENTE_ACHAT_DEVISE', 'EXECUTE', 'RESPONSABLE_FINANCIER').allowed, true);
+  assert.equal(canUserPerformTransition('EN_ATTENTE_ACHAT_DEVISE', 'EXECUTE', 'RESPONSABLE_FINANCIER').allowed, false);
   assert.equal(canUserPerformTransition('EN_ATTENTE_ACHAT_DEVISE', 'EXECUTE', 'AGENT_FINANCIER').allowed, false);
 });
 
-test('allows Administrator to perform valid transitions', () => {
+test('allows Administrator to perform valid transitions but still enforces consultation closure before execution', () => {
   assert.equal(canUserPerformTransition('SIGNE', 'DEPOSE_BANQUE', 'ADMINISTRATEUR').allowed, true);
-  assert.equal(canUserPerformTransition('EN_ATTENTE_ACHAT_DEVISE', 'EXECUTE', 'ADMINISTRATEUR').allowed, true);
+  assert.equal(canUserPerformTransition('EN_ATTENTE_ACHAT_DEVISE', 'EXECUTE', 'ADMINISTRATEUR').allowed, false);
+  assert.equal(canUserPerformTransition('DEPOSE_BANQUE', 'EXECUTE', 'ADMINISTRATEUR').allowed, true);
 });
 
 test('normalizeLegacyStatus maps legacy statuses cleanly to the 5-stage circuit', () => {
@@ -178,5 +180,63 @@ test('applyConsultationUpdateToOrder transitions order to DEPOSE_BANQUE, sets ra
   assert.match(res.order.history[0].comment ?? '', /101\/26/);
   assert.match(res.order.history[0].comment ?? '', /3\.1120 TND/);
   assert.equal(canUserPerformTransition(res.order.status, 'EXECUTE', 'RESPONSABLE_FINANCIER').allowed, true);
+  assert.equal(canExecuteOrder(res.order).allowed, true);
 });
+
+test('canExecuteOrder blocks execution when negotiation is required until consultation is closed', () => {
+  const pendingOrder = makeTestOrder({
+    id: 'ord_neg_1',
+    requiresRateNegotiation: true,
+    status: 'EN_ATTENTE_ACHAT_DEVISE',
+    exchangeTransaction: { id: 'ex_1', orderId: 'ord_neg_1', status: 'NON_DEMARRE' },
+  });
+
+  // 1. Aucune consultation créée -> bloqué
+  const checkNoCons = canExecuteOrder(pendingOrder, []);
+  assert.equal(checkNoCons.allowed, false);
+  assert.match(checkNoCons.reason ?? '', /négociation du cours est exigée/i);
+
+  // 2. Consultation ouverte -> toujours bloqué avec référence de la consultation
+  const openConsultation: Pick<CurrencyConsultation, 'orderIds' | 'status' | 'consultationNumber'> = {
+    consultationNumber: 'CONS-2026-0009',
+    orderIds: ['ord_neg_1'],
+    status: 'OUVERTE',
+  };
+  const checkOpenCons = canExecuteOrder(pendingOrder, [openConsultation]);
+  assert.equal(checkOpenCons.allowed, false);
+  assert.equal(checkOpenCons.openConsultationNumber, 'CONS-2026-0009');
+  assert.match(checkOpenCons.reason ?? '', /CONS-2026-0009/);
+
+  // 3. Même si statut DEPOSE_BANQUE forcé sans validation d'achat devise -> bloqué
+  const unvalidatedDeposited = makeTestOrder({
+    id: 'ord_neg_1',
+    requiresRateNegotiation: true,
+    status: 'DEPOSE_BANQUE',
+    exchangeTransaction: { id: 'ex_1', orderId: 'ord_neg_1', status: 'CONSULTATION_EN_COURS' },
+  });
+  assert.equal(canExecuteOrder(unvalidatedDeposited, [openConsultation]).allowed, false);
+
+  // 4. Après clôture de la consultation -> autorisé
+  const closedConsultation: Pick<CurrencyConsultation, 'orderIds' | 'status' | 'consultationNumber'> = {
+    consultationNumber: 'CONS-2026-0009',
+    orderIds: ['ord_neg_1'],
+    status: 'CLOTUREE',
+  };
+  const afterClosure = makeTestOrder({
+    id: 'ord_neg_1',
+    requiresRateNegotiation: true,
+    status: 'DEPOSE_BANQUE',
+    exchangeTransaction: { id: 'ex_1', orderId: 'ord_neg_1', status: 'VALIDE' },
+  });
+  assert.equal(canExecuteOrder(afterClosure, [closedConsultation]).allowed, true);
+
+  // 5. Ordre sans négociation exigée -> autorisé dès DEPOSE_BANQUE
+  const directOrder = makeTestOrder({
+    id: 'ord_direct',
+    requiresRateNegotiation: false,
+    status: 'DEPOSE_BANQUE',
+  });
+  assert.equal(canExecuteOrder(directOrder, []).allowed, true);
+});
+
 

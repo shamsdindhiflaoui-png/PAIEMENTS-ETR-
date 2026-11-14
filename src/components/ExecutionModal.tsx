@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { CheckCircle2, X, AlertCircle, DollarSign, Calculator } from 'lucide-react';
-import { PaymentOrder, User } from '../types/payment';
-import { formatTndCurrency } from '../utils/workflowRules';
+import { CurrencyConsultation, PaymentOrder, User } from '../types/payment';
+import { canExecuteOrder, formatTndCurrency } from '../utils/workflowRules';
 
 interface ExecutionModalProps {
   order: PaymentOrder;
+  consultations?: CurrencyConsultation[];
   currentUser: User;
   onClose: () => void;
   onSubmit: (executionData: Partial<PaymentOrder>) => Promise<void>;
@@ -12,10 +13,12 @@ interface ExecutionModalProps {
 
 export const ExecutionModal: React.FC<ExecutionModalProps> = ({
   order,
+  consultations = [],
   currentUser,
   onClose,
   onSubmit,
 }) => {
+  const execCheck = canExecuteOrder(order, consultations);
   const [executionDate, setExecutionDate] = useState<string>(new Date().toISOString().split('T')[0]);
   const [executingBank, setExecutingBank] = useState<string>(
     order.exchangeTransaction?.selectedBankName || order.bankName || 'Société Tunisienne de Banque'
@@ -47,6 +50,13 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
 
   const handleConfirm = async () => {
     setErrorMsg(null);
+    if (!execCheck.allowed) {
+      setErrorMsg(
+        execCheck.reason ||
+          "Exécution impossible tant que la consultation d'achat de devises n'est pas clôturée."
+      );
+      return;
+    }
     if (!swiftReference.trim()) {
       setErrorMsg('La référence du message SWIFT MT103 est obligatoire pour clôturer le transfert.');
       return;
@@ -109,6 +119,13 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
             <p className="font-mono font-bold text-slate-900 mt-0.5">{order.amount} {order.currency}</p>
           </div>
         </div>
+
+        {!execCheck.allowed && (
+          <div className="p-3 rounded-lg bg-purple-50 border border-purple-200 text-purple-900 text-xs flex items-center gap-2 font-medium">
+            <AlertCircle className="w-4 h-4 text-purple-700 shrink-0" />
+            <span>{execCheck.reason}</span>
+          </div>
+        )}
 
         {errorMsg && (
           <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
@@ -227,9 +244,9 @@ export const ExecutionModal: React.FC<ExecutionModalProps> = ({
           </button>
           <button
             type="button"
-            disabled={isSubmitting}
+            disabled={isSubmitting || !execCheck.allowed}
             onClick={handleConfirm}
-            className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-2xs transition-colors"
+            className="px-4 py-1.5 text-xs font-bold text-white bg-emerald-600 hover:bg-emerald-700 rounded-lg shadow-2xs transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             Clôturer & Marquer EXÉCUTÉ
           </button>

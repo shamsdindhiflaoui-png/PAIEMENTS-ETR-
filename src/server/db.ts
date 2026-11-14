@@ -14,10 +14,16 @@ import {
   PaymentStatus,
   CurrencyConsultation,
   ExchangeQuote,
+  Invoice,
 } from '../types/payment';
+import {
+  validateOrderAgainstInvoice,
+  computeInvoicePaymentSummary,
+} from '../utils/invoiceUtils';
 import { numberToFrenchWords } from '../utils/numberToFrenchWords';
 import {
   applyConsultationUpdateToOrder,
+  canExecuteOrder,
   generateOrderNumber,
   generateStructuredOrderNumber,
   canUserPerformTransition,
@@ -276,6 +282,81 @@ export const INITIAL_SUPPLIERS: Supplier[] = [
     email: 'leaf.settlements@bat.com',
     phone: '+44 20 7845 1000',
     active: true,
+  },
+];
+
+export const INITIAL_INVOICES: Invoice[] = [
+  {
+    id: 'inv_demo_01',
+    invoiceNumber: 'FAC-ULT-88902',
+    invoiceDate: '2026-01-10',
+    dueDate: '2026-02-10',
+    contractNumber: 'CT-2026/MTK-001',
+    purpose: 'Importation lots tabac brut Virginie Flue-Cured',
+    operationNature: 'Importation matières premières industrielles',
+    supplierId: 'sup_universal_leaf',
+    supplierName: 'Universal Leaf Tobacco Company Inc.',
+    supplierCountry: 'États-Unis',
+    supplierAddress: '9201 Forest Hill Avenue, Richmond, VA 23235',
+    supplierBank: 'JPMorgan Chase Bank, N.A., New York',
+    supplierIban: 'US89CHAS32009876543210',
+    supplierSwift: 'CHASUS33',
+    currency: 'USD',
+    totalAmount: 145000,
+    notes: 'Facture soldée en totalité via OP-2026-0001.',
+    documents: [],
+    createdAt: '2026-01-12T08:30:00.000Z',
+    createdBy: 'Monia Ben Salem',
+    createdById: 'usr_agent1',
+    isDemo: true,
+  },
+  {
+    id: 'inv_demo_02',
+    invoiceNumber: 'HAU-INV-2026-441',
+    invoiceDate: '2026-01-28',
+    dueDate: '2026-03-15',
+    contractNumber: 'CT-2026/MTK-009',
+    purpose: 'Acquisition pièces de rechange d’origine pour chaîne Hauni Protos 90',
+    operationNature: 'Pièces de rechange industrielles',
+    supplierId: 'sup_hauni',
+    supplierName: 'Hauni Maschinenbau GmbH (Körber Technologies)',
+    supplierCountry: 'Allemagne',
+    supplierAddress: 'Kampchaussee 8-32, 21033 Hamburg',
+    supplierBank: 'Deutsche Bank AG Hamburg',
+    supplierIban: 'DE89200700000123456789',
+    supplierSwift: 'DEUTDEDBHAM',
+    currency: 'EUR',
+    totalAmount: 95000,
+    notes: 'Paiement fractionné : première tranche (68 500 EUR) ordonnancée sur OP-2026-0002, solde de 26 500 EUR disponible.',
+    documents: [],
+    createdAt: '2026-01-30T10:00:00.000Z',
+    createdBy: 'Monia Ben Salem',
+    createdById: 'usr_agent1',
+    isDemo: true,
+  },
+  {
+    id: 'inv_demo_03',
+    invoiceNumber: 'FAC-SWM-2026-308',
+    invoiceDate: '2026-02-14',
+    dueDate: '2026-03-30',
+    contractNumber: 'CT-2026/MTK-022',
+    purpose: 'Approvisionnement bobines papier à cigarettes haute porosité',
+    operationNature: 'Consommables de fabrication tabac',
+    supplierId: 'sup_swm_glatfelter',
+    supplierName: 'SWM International (Schweitzer-Mauduit)',
+    supplierCountry: 'France',
+    supplierAddress: 'Papeteries de Kergroës, 29393 Quimperlé Cedex',
+    supplierBank: 'BNP Paribas Paris Opéra',
+    supplierIban: 'FR7630004008920001234567890',
+    supplierSwift: 'BNPAFRRP',
+    currency: 'EUR',
+    totalAmount: 48000,
+    notes: 'Facture reçue et prête à être réglée en un ou plusieurs ordres de paiement.',
+    documents: [],
+    createdAt: '2026-02-14T11:20:00.000Z',
+    createdBy: 'Monia Ben Salem',
+    createdById: 'usr_agent1',
+    isDemo: true,
   },
 ];
 
@@ -1066,6 +1147,7 @@ class Database {
   private users: User[] = [...INITIAL_USERS];
   private suppliers: Supplier[] = [...INITIAL_SUPPLIERS];
   private banks: Bank[] = [...INITIAL_BANKS];
+  private invoices: Invoice[] = [...INITIAL_INVOICES];
   private orders: PaymentOrder[] = [...INITIAL_ORDERS];
   private consultations: CurrencyConsultation[] = [];
   private auditLogs: AuditLog[] = [...INITIAL_AUDIT_LOGS];
@@ -1128,6 +1210,9 @@ class Database {
             };
           });
         }
+        if (parsed.invoices && Array.isArray(parsed.invoices)) {
+          this.invoices = parsed.invoices;
+        }
         if (parsed.consultations && Array.isArray(parsed.consultations)) {
           this.consultations = parsed.consultations;
         }
@@ -1154,6 +1239,7 @@ class Database {
         users: this.users,
         suppliers: this.suppliers,
         banks: this.banks,
+        invoices: this.invoices,
         orders: this.orders,
         consultations: this.consultations,
         auditLogs: this.auditLogs,
@@ -1290,6 +1376,110 @@ class Database {
     return updatedBank;
   }
 
+  public getInvoices(filters: { isDemo?: boolean | 'ALL' } = {}): Invoice[] {
+    return this.invoices.filter(inv => {
+      if (filters.isDemo !== undefined && filters.isDemo !== 'ALL' && inv.isDemo !== filters.isDemo) {
+        return false;
+      }
+      return true;
+    });
+  }
+
+  public getInvoiceById(id: string): Invoice | undefined {
+    return this.invoices.find(inv => inv.id === id);
+  }
+
+  public createInvoice(payload: Partial<Invoice>, user: User): Invoice {
+    const invoiceNumber = (payload.invoiceNumber || '').trim();
+    if (!invoiceNumber) {
+      throw new Error('Le numéro de facture est obligatoire.');
+    }
+    const duplicate = this.invoices.find(
+      inv => inv.invoiceNumber.trim().toLowerCase() === invoiceNumber.toLowerCase()
+    );
+    if (duplicate) {
+      throw new Error(`Une facture portant le numéro ${invoiceNumber} existe déjà.`);
+    }
+
+    const supplierName = (payload.supplierName || '').trim();
+    if (!supplierName) {
+      throw new Error('Le nom du fournisseur est obligatoire.');
+    }
+
+    const totalAmount = Number(payload.totalAmount);
+    if (!Number.isFinite(totalAmount) || totalAmount <= 0) {
+      throw new Error('Le montant total de la facture doit être strictement supérieur à 0.');
+    }
+
+    const now = new Date().toISOString();
+    const newInvoice: Invoice = {
+      id: 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+      invoiceNumber,
+      invoiceDate: payload.invoiceDate || now.split('T')[0],
+      dueDate: payload.dueDate || undefined,
+      contractNumber: (payload.contractNumber || '').trim() || undefined,
+      purpose: (payload.purpose || '').trim() || `Règlement facture ${invoiceNumber}`,
+      operationNature: payload.operationNature || 'Importation tabac brut',
+      supplierId: payload.supplierId || undefined,
+      supplierName,
+      supplierCountry: (payload.supplierCountry || '').trim(),
+      supplierAddress: (payload.supplierAddress || '').trim(),
+      supplierBank: (payload.supplierBank || '').trim(),
+      supplierIban: (payload.supplierIban || '').trim(),
+      supplierSwift: (payload.supplierSwift || '').trim().toUpperCase(),
+      currency: payload.currency || 'EUR',
+      totalAmount: Number(totalAmount.toFixed(2)),
+      notes: (payload.notes || '').trim() || undefined,
+      documents: Array.isArray(payload.documents) ? payload.documents : [],
+      createdAt: now,
+      createdBy: user.name,
+      createdById: user.id,
+      isDemo: payload.isDemo !== undefined ? payload.isDemo : false,
+    };
+
+    this.invoices.unshift(newInvoice);
+    this.addAuditLog({
+      entityType: 'INVOICE',
+      entityId: newInvoice.id,
+      entityRef: newInvoice.invoiceNumber,
+      action: 'INVOICE_CREATED',
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      details: `Création de la facture ${newInvoice.invoiceNumber} (${newInvoice.supplierName} — ${newInvoice.totalAmount} ${newInvoice.currency})`,
+    });
+
+    this.saveToDisk();
+    return newInvoice;
+  }
+
+  public deleteInvoice(id: string, user: User): void {
+    const idx = this.invoices.findIndex(inv => inv.id === id);
+    if (idx === -1) {
+      throw new Error('Facture introuvable.');
+    }
+    const invoice = this.invoices[idx];
+    const summary = computeInvoicePaymentSummary(invoice, this.orders);
+    if (summary.linkedOrders.length > 0) {
+      throw new Error(
+        `Suppression impossible : ${summary.linkedOrders.length} ordre(s) de paiement actif(s) sont déjà rattaché(s) à la facture ${invoice.invoiceNumber}.`
+      );
+    }
+
+    this.invoices.splice(idx, 1);
+    this.addAuditLog({
+      entityType: 'INVOICE',
+      entityId: invoice.id,
+      entityRef: invoice.invoiceNumber,
+      action: 'INVOICE_DELETED',
+      userId: user.id,
+      userName: user.name,
+      userRole: user.role,
+      details: `Suppression de la facture ${invoice.invoiceNumber} (${invoice.totalAmount} ${invoice.currency})`,
+    });
+    this.saveToDisk();
+  }
+
   public getOrders(filters: FilterParams = {}): PaymentOrder[] {
     return this.orders.filter(order => {
       if (filters.status && filters.status !== 'ALL' && order.status !== filters.status) {
@@ -1349,6 +1539,18 @@ class Database {
     const currency = payload.currency || 'EUR';
     const amountInWords = payload.amountInWords || numberToFrenchWords(amount, currency);
 
+    let linkedInvoice: Invoice | undefined;
+    if (payload.invoiceId) {
+      linkedInvoice = this.getInvoiceById(payload.invoiceId);
+      if (!linkedInvoice) {
+        throw new Error('Facture rattachée introuvable.');
+      }
+      const validation = validateOrderAgainstInvoice(linkedInvoice, this.orders, amount, currency);
+      if (!validation.valid) {
+        throw new Error(validation.error || 'Montant invalide par rapport au solde de la facture.');
+      }
+    }
+
     const initialStatus: PaymentStatus =
       payload.status === 'TRANSMIS_SIGNATURE' ? 'TRANSMIS_SIGNATURE' : 'SAISI';
 
@@ -1373,7 +1575,7 @@ class Database {
       userCode: payload.userCode || structured.userPart,
       yearCode: payload.yearCode || structured.yearPart,
       orderSeq: payload.orderSeq || structured.seqPart,
-      contractNumber: payload.contractNumber || '',
+      contractNumber: payload.contractNumber || linkedInvoice?.contractNumber || '',
       transferType: payload.transferType || 'VIREMENT',
       lcNumber: payload.lcNumber || '',
       requiresRateNegotiation: Boolean(payload.requiresRateNegotiation),
@@ -1383,22 +1585,23 @@ class Database {
       createdBy: user.name,
       createdById: user.id,
       department: payload.department || 'Direction Financière et Comptable',
-      purpose: payload.purpose || 'Règlement fournisseur étranger',
-      supplierId: payload.supplierId,
-      beneficiaryName: payload.beneficiaryName || '',
-      beneficiaryCountry: payload.beneficiaryCountry || '',
-      beneficiaryAddress: payload.beneficiaryAddress || '',
-      beneficiaryBank: payload.beneficiaryBank || '',
-      beneficiaryIban: payload.beneficiaryIban || '',
-      beneficiarySwift: payload.beneficiarySwift || '',
+      purpose: payload.purpose || linkedInvoice?.purpose || 'Règlement fournisseur étranger',
+      supplierId: payload.supplierId || linkedInvoice?.supplierId,
+      beneficiaryName: payload.beneficiaryName || linkedInvoice?.supplierName || '',
+      beneficiaryCountry: payload.beneficiaryCountry || linkedInvoice?.supplierCountry || '',
+      beneficiaryAddress: payload.beneficiaryAddress || linkedInvoice?.supplierAddress || '',
+      beneficiaryBank: payload.beneficiaryBank || linkedInvoice?.supplierBank || '',
+      beneficiaryIban: payload.beneficiaryIban || linkedInvoice?.supplierIban || '',
+      beneficiarySwift: payload.beneficiarySwift || linkedInvoice?.supplierSwift || '',
       currency,
       amount,
       amountInWords,
       transferPurpose: payload.transferPurpose || payload.purpose || '',
-      invoiceNumber: payload.invoiceNumber || '',
-      invoiceDate: payload.invoiceDate || now.split('T')[0],
+      invoiceId: linkedInvoice?.id,
+      invoiceNumber: payload.invoiceNumber || linkedInvoice?.invoiceNumber || '',
+      invoiceDate: payload.invoiceDate || linkedInvoice?.invoiceDate || now.split('T')[0],
       domiciliationNumber: payload.domiciliationNumber || '',
-      operationNature: payload.operationNature || 'Importation industrielle',
+      operationNature: payload.operationNature || linkedInvoice?.operationNature || 'Importation industrielle',
       bankId: payload.bankId || '',
       bankName: payload.bankName || '',
       bankBranch: payload.bankBranch || '',
@@ -1425,7 +1628,7 @@ class Database {
       userId: user.id,
       userName: user.name,
       userRole: user.role,
-      details: `Création de l'ordre ${newOrder.orderNumber} pour ${newOrder.beneficiaryName} (${newOrder.amount} ${newOrder.currency}). Statut: ${newOrder.status}`,
+      details: `Création de l'ordre ${newOrder.orderNumber} pour ${newOrder.beneficiaryName} (${newOrder.amount} ${newOrder.currency})${linkedInvoice ? ` — Facture ${linkedInvoice.invoiceNumber}` : ''}. Statut: ${newOrder.status}`,
     });
 
     this.saveToDisk();
@@ -1488,6 +1691,16 @@ class Database {
     }
 
     const order = this.orders[idx];
+    if (targetStatus === 'EXECUTE') {
+      const execCheck = canExecuteOrder(order, this.consultations);
+      if (!execCheck.allowed) {
+        throw new Error(
+          execCheck.reason ||
+            "Exécution impossible : la consultation d'achat de devises doit être clôturée avant l'exécution."
+        );
+      }
+    }
+
     const check = canUserPerformTransition(order.status, targetStatus, user.role);
     if (!check.allowed) {
       throw new Error(check.reason || 'Action non autorisée sur cet ordre de paiement.');
@@ -2004,6 +2217,7 @@ class Database {
 
   public resetDemoData() {
     this.orders = [...INITIAL_ORDERS];
+    this.invoices = [...INITIAL_INVOICES];
     this.suppliers = [...INITIAL_SUPPLIERS];
     this.banks = [...INITIAL_BANKS];
     this.users = [...INITIAL_USERS];

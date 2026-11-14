@@ -26,6 +26,8 @@ export const Header: React.FC<HeaderProps> = ({
     switch (activeView) {
       case 'dashboard':
         return 'Tableau de bord de direction';
+      case 'invoices':
+        return 'Module 00 · Saisie & Suivi des Factures Fournisseurs';
       case 'new_order':
         return 'Saisie d’un nouvel ordre de paiement';
       case 'orders_list':
@@ -47,6 +49,11 @@ export const Header: React.FC<HeaderProps> = ({
     <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between gap-6 shrink-0 shadow-xs z-10">
       {/* Zone 1: Breadcrumb & Context */}
       <div className="flex items-center gap-2.5 min-w-0">
+        <img
+          src="/assets/aistudio/Logo_MTK_737e87ca.png"
+          alt="MTK"
+          className="w-6 h-6 object-contain shrink-0"
+        />
         <span className="text-xs font-semibold uppercase tracking-wider text-blue-700 whitespace-nowrap">
           MTK · DFC
         </span>

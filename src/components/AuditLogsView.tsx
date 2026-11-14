@@ -92,7 +92,9 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ logs }) => {
             className="text-xs bg-slate-50 border border-slate-200 rounded-lg px-2.5 py-2 focus:outline-none"
           >
             <option value="ALL">Toutes les entités ({logs.length})</option>
+            <option value="INVOICE">Factures</option>
             <option value="PAYMENT_ORDER">Ordres de paiement</option>
+            <option value="CONSULTATION">Consultations</option>
             <option value="SUPPLIER">Fournisseurs</option>
             <option value="BANK">Banques</option>
             <option value="USER">Utilisateurs</option>

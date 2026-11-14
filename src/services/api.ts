@@ -10,6 +10,7 @@ import {
   BankDeposit,
   CurrencyConsultation,
   ExchangeQuote,
+  Invoice,
 } from '../types/payment';
 
 class ApiService {
@@ -105,6 +106,44 @@ class ApiService {
       throw new Error(err.error || 'Erreur mise à jour banque');
     }
     return res.json();
+  }
+
+  public async getInvoices(isDemo?: boolean | 'ALL'): Promise<Invoice[]> {
+    const params = new URLSearchParams();
+    if (isDemo !== undefined && isDemo !== 'ALL') {
+      params.set('isDemo', String(isDemo));
+    }
+    const qs = params.toString();
+    const res = await fetch(`/api/invoices${qs ? `?${qs}` : ''}`, {
+      cache: 'no-store',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) throw new Error('Erreur lors du chargement des factures');
+    return res.json();
+  }
+
+  public async createInvoice(invoice: Partial<Invoice>): Promise<Invoice> {
+    const res = await fetch('/api/invoices', {
+      method: 'POST',
+      headers: this.getHeaders(),
+      body: JSON.stringify(invoice),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la création de la facture');
+    }
+    return res.json();
+  }
+
+  public async deleteInvoice(id: string): Promise<void> {
+    const res = await fetch(`/api/invoices/${id}`, {
+      method: 'DELETE',
+      headers: this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la suppression de la facture');
+    }
   }
 
   public async getOrders(filters: FilterParams = {}): Promise<PaymentOrder[]> {

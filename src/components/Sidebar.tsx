@@ -12,11 +12,13 @@ import {
   Briefcase,
   FileText,
   BadgeDollarSign,
+  FileSpreadsheet,
 } from 'lucide-react';
 import { User, UserRole } from '../types/payment';
 
 export type NavItem =
   | 'dashboard'
+  | 'invoices'
   | 'new_order'
   | 'orders_list'
   | 'pending_review'
@@ -28,6 +30,7 @@ interface SidebarProps {
   activeView: NavItem;
   onNavigate: (view: NavItem) => void;
   pendingCount: number;
+  unpaidInvoicesCount?: number;
   consultationPendingCount?: number;
   currentUser: User;
   onUserChange: (user: User) => void;
@@ -38,6 +41,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   activeView,
   onNavigate,
   pendingCount,
+  unpaidInvoicesCount = 0,
   consultationPendingCount = 0,
   currentUser,
   onUserChange,
@@ -63,6 +67,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       label: 'Tableau de bord',
       icon: LayoutDashboard,
       badge: null,
+    },
+    {
+      id: 'invoices' as NavItem,
+      label: 'Factures',
+      icon: FileSpreadsheet,
+      badge: unpaidInvoicesCount > 0 ? unpaidInvoicesCount : null,
     },
     {
       id: 'new_order' as NavItem,
@@ -109,8 +119,12 @@ export const Sidebar: React.FC<SidebarProps> = ({
       {/* Brand Header */}
       <div className="p-5 border-b border-slate-800/80 bg-slate-950/40">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-lg bg-blue-600 flex items-center justify-center text-white font-bold text-lg shadow-sm tracking-wider">
-            MTK
+          <div className="w-11 h-11 rounded-lg bg-white p-1.5 flex items-center justify-center shadow-sm shrink-0 border border-slate-200/80">
+            <img
+              src="/assets/aistudio/Logo_MTK_737e87ca.png"
+              alt="Logo Manufacture des Tabacs de Kairouan (MTK)"
+              className="w-full h-full object-contain"
+            />
           </div>
           <div className="min-w-0 flex-1">
             <h1 className="text-sm font-bold text-white tracking-tight uppercase leading-tight truncate">

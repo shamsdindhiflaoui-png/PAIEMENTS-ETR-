@@ -275,15 +275,22 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
             <div className="bg-white w-full max-w-[780px] shadow-md border border-slate-200 px-8 py-7 text-slate-900 space-y-5 print:shadow-none print:border-0">
               {/* MTK Official Recap Header Banner */}
               <div className="border border-slate-700 bg-[#f4f6c8] px-5 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                <div>
-                  <div className="text-sm font-bold tracking-wide text-slate-900">
-                    MANUFACTURE DES TABACS DE KAIROUAN (MTK)
-                  </div>
-                  <div className="text-[11px] text-slate-700 mt-0.5">
-                    Direction Financière & Comptable (DFC) — Règlements Internationaux
-                  </div>
-                  <div className="text-[10px] text-slate-600">
-                    B.P. 106 – 3100 Kairouan | Tél : (77) 281.309 | Email : mtk.tn@mtk.tn
+                <div className="flex items-center gap-3">
+                  <img
+                    src="/assets/aistudio/Logo_MTK_737e87ca.png"
+                    alt="Logo MTK"
+                    className="w-12 h-12 object-contain shrink-0"
+                  />
+                  <div>
+                    <div className="text-sm font-bold tracking-wide text-slate-900">
+                      MANUFACTURE DES TABACS DE KAIROUAN (MTK)
+                    </div>
+                    <div className="text-[11px] text-slate-700 mt-0.5">
+                      Direction Financière & Comptable (DFC) — Règlements Internationaux
+                    </div>
+                    <div className="text-[10px] text-slate-600">
+                      B.P. 106 – 3100 Kairouan | Tél : (77) 281.309 | Email : mtk.tn@mtk.tn
+                    </div>
                   </div>
                 </div>
                 <div className="bg-slate-900 text-white px-3.5 py-2 rounded text-center shrink-0">

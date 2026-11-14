@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import {
   FileText,
   Upload,
@@ -14,14 +14,32 @@ import {
   Trash2,
   Eye,
   Info,
+  FileSpreadsheet,
+  Lock,
 } from 'lucide-react';
-import { Supplier, Bank, User, PaymentOrder, DocumentType, PaymentDocument } from '../types/payment';
+import {
+  Supplier,
+  Bank,
+  User,
+  PaymentOrder,
+  DocumentType,
+  PaymentDocument,
+  Invoice,
+} from '../types/payment';
 import { numberToFrenchWords } from '../utils/numberToFrenchWords';
 import { generateStructuredOrderNumber } from '../utils/workflowRules';
+import {
+  computeInvoicePaymentSummary,
+  getAvailableInvoicesForOrder,
+  validateOrderAgainstInvoice,
+} from '../utils/invoiceUtils';
 
 interface NewOrderViewProps {
   suppliers: Supplier[];
   banks: Bank[];
+  invoices: Invoice[];
+  orders: PaymentOrder[];
+  initialInvoiceId?: string | null;
   currentUser: User;
   existingCount: number;
   onSubmit: (orderData: Partial<PaymentOrder>) => Promise<void>;
@@ -31,6 +49,9 @@ interface NewOrderViewProps {
 export const NewOrderView: React.FC<NewOrderViewProps> = ({
   suppliers,
   banks,
+  invoices,
+  orders,
+  initialInvoiceId,
   currentUser,
   existingCount,
   onSubmit,
@@ -88,6 +109,75 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
   // Validation & Loading
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
+
+  // Module 00 Facture sélectionnée (un ou plusieurs ordres par facture)
+  const [selectedInvoiceId, setSelectedInvoiceId] = useState<string>('');
+  const [paymentMode, setPaymentMode] = useState<'FULL' | 'PARTIAL'>('FULL');
+
+  const availableInvoices = useMemo(
+    () => getAvailableInvoicesForOrder(invoices, orders),
+    [invoices, orders]
+  );
+
+  const selectedInvoice = useMemo(
+    () => invoices.find(inv => inv.id === selectedInvoiceId) || null,
+    [invoices, selectedInvoiceId]
+  );
+
+  const selectedInvoiceSummary = useMemo(
+    () => (selectedInvoice ? computeInvoicePaymentSummary(selectedInvoice, orders) : null),
+    [selectedInvoice, orders]
+  );
+
+  const applyInvoiceSelection = (invoiceId: string) => {
+    setErrorMsg(null);
+    if (!invoiceId) {
+      setSelectedInvoiceId('');
+      return;
+    }
+    const found = invoices.find(inv => inv.id === invoiceId);
+    if (!found) return;
+    const summary = computeInvoicePaymentSummary(found, orders);
+
+    setSelectedInvoiceId(found.id);
+    if (found.contractNumber) setContractNumber(found.contractNumber);
+    setPurpose(found.purpose || '');
+    setTransferPurpose(
+      `Règlement facture ${found.invoiceNumber}${
+        summary.linkedOrders.length > 0 ? ` (Tranche ${summary.linkedOrders.length + 1})` : ''
+      }`
+    );
+    setSelectedSupplierId(found.supplierId || '');
+    setBeneficiaryName(found.supplierName || '');
+    setBeneficiaryCountry(found.supplierCountry || '');
+    setBeneficiaryAddress(found.supplierAddress || '');
+    setBeneficiaryBank(found.supplierBank || '');
+    setBeneficiaryIban(found.supplierIban || '');
+    setBeneficiarySwift(found.supplierSwift || '');
+    setCurrency(found.currency);
+    setOperationNature(found.operationNature || 'Importation tabac brut');
+    setInvoiceNumber(found.invoiceNumber);
+    setInvoiceDate(found.invoiceDate);
+    setPaymentMode('FULL');
+    setAmount(summary.remainingAmount > 0 ? String(summary.remainingAmount) : '');
+
+    if (found.documents && found.documents.length > 0) {
+      setDocuments(prev => {
+        const existingNames = new Set(prev.map(d => d.name));
+        const newDocs = found.documents!
+          .filter(d => !existingNames.has(d.name))
+          .map(({ id: _id, ...rest }) => rest);
+        return [...prev, ...newDocs];
+      });
+    }
+  };
+
+  useEffect(() => {
+    if (initialInvoiceId && invoices.some(inv => inv.id === initialInvoiceId)) {
+      applyInvoiceSelection(initialInvoiceId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [initialInvoiceId]);
 
   // Auto-convert amount to French words when amount or currency changes
   useEffect(() => {
@@ -185,6 +275,19 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
       return;
     }
 
+    if (selectedInvoice) {
+      const invoiceCheck = validateOrderAgainstInvoice(
+        selectedInvoice,
+        orders,
+        parsedAmount,
+        currency
+      );
+      if (!invoiceCheck.valid) {
+        setErrorMsg(invoiceCheck.error || 'Montant incompatible avec le solde de la facture.');
+        return;
+      }
+    }
+
     try {
       setIsSubmitting(true);
       const structuredFullNumber = `${userPart}-${yearPart}-${seqPart}`;
@@ -209,6 +312,7 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
         amount: parsedAmount,
         amountInWords: amountInWords || numberToFrenchWords(parsedAmount, currency),
         transferPurpose: transferPurpose || purpose,
+        invoiceId: selectedInvoiceId || undefined,
         invoiceNumber,
         invoiceDate,
         operationNature,
@@ -261,6 +365,166 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
           <span className="font-medium">{errorMsg}</span>
         </div>
       )}
+
+      {/* SECTION 0: Facture à régler (Module Factures) */}
+      <div className="bg-white rounded-xl border-2 border-blue-200 p-6 shadow-2xs space-y-4">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-3 border-b border-slate-100">
+          <div className="flex items-center gap-2">
+            <FileSpreadsheet className="w-4 h-4 text-blue-700" />
+            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+              0. Facture à Régler (Module Factures)
+            </h3>
+          </div>
+          <span className="text-[11px] font-medium text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200">
+            {availableInvoices.length} facture(s) avec solde disponible
+          </span>
+        </div>
+
+        <div>
+          <label className="block text-xs font-semibold text-slate-700 mb-1.5">
+            Sélectionner une facture enregistrée (paiement en 1 ou plusieurs ordres)
+          </label>
+          <select
+            aria-label="Sélectionner une facture à régler"
+            value={selectedInvoiceId}
+            onChange={e => applyInvoiceSelection(e.target.value)}
+            className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2.5 text-xs font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
+          >
+            <option value="">-- Saisie manuelle sans rattachement facture --</option>
+            {availableInvoices.map(({ invoice, summary }) => (
+              <option key={invoice.id} value={invoice.id}>
+                {invoice.invoiceNumber} — {invoice.supplierName} — Reste :{' '}
+                {summary.remainingAmount.toLocaleString('fr-FR', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{' '}
+                / {invoice.totalAmount.toLocaleString('fr-FR', {
+                  minimumFractionDigits: 2,
+                  maximumFractionDigits: 2,
+                })}{' '}
+                {invoice.currency}
+                {summary.linkedOrders.length > 0
+                  ? ` (${summary.linkedOrders.length} ordre(s) déjà émis)`
+                  : ''}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        {selectedInvoice && selectedInvoiceSummary && (() => {
+          const parsedAmt = parseFloat(amount) || 0;
+          const remainingAfter = Math.max(
+            0,
+            Number((selectedInvoiceSummary.remainingAmount - parsedAmt).toFixed(2))
+          );
+          const exceedsBalance = parsedAmt > selectedInvoiceSummary.remainingAmount + 0.005;
+
+          return (
+            <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-3">
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+                <div className="bg-white rounded-lg p-2.5 border border-blue-100">
+                  <div className="text-[11px] text-slate-500">Montant Total Facture</div>
+                  <div className="font-mono font-bold text-slate-900 mt-0.5">
+                    {selectedInvoice.totalAmount.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}{' '}
+                    {selectedInvoice.currency}
+                  </div>
+                </div>
+                <div className="bg-white rounded-lg p-2.5 border border-blue-100">
+                  <div className="text-[11px] text-slate-500">
+                    Déjà ordonnancé ({selectedInvoiceSummary.linkedOrders.length})
+                  </div>
+                  <div className="font-mono font-bold text-amber-700 mt-0.5">
+                    {selectedInvoiceSummary.allocatedAmount.toLocaleString('fr-FR', {
+                      minimumFractionDigits: 2,
+                    })}{' '}
+                    {selectedInvoice.currency}
+                  </div>
+                </div>
+                <div className="bg-white rounded-lg p-2.5 border border-blue-100">
+                  <div className="text-[11px] text-slate-500">Solde restant disponible</div>
+                  <div className="font-mono font-bold text-blue-700 mt-0.5">
+                    {selectedInvoiceSummary.remainingAmount.toLocaleString('fr-FR', {
+                      minimumFractionDigits: 2,
+                    })}{' '}
+                    {selectedInvoice.currency}
+                  </div>
+                </div>
+                <div className="bg-white rounded-lg p-2.5 border border-blue-100">
+                  <div className="text-[11px] text-slate-500">Reste après cet ordre</div>
+                  <div
+                    className={`font-mono font-bold mt-0.5 ${
+                      exceedsBalance
+                        ? 'text-rose-700'
+                        : remainingAfter <= 0.005
+                        ? 'text-emerald-700'
+                        : 'text-slate-900'
+                    }`}
+                  >
+                    {exceedsBalance
+                      ? 'Dépassement !'
+                      : `${remainingAfter.toLocaleString('fr-FR', {
+                          minimumFractionDigits: 2,
+                        })} ${selectedInvoice.currency}`}
+                  </div>
+                </div>
+              </div>
+
+              {selectedInvoiceSummary.linkedOrders.length > 0 && (
+                <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
+                  <span className="font-semibold">Ordres précédents :</span>
+                  {selectedInvoiceSummary.linkedOrders.map(o => (
+                    <span
+                      key={o.id}
+                      className="px-2 py-0.5 rounded bg-white border border-blue-200 font-mono text-blue-800"
+                    >
+                      {o.orderNumber} ({o.amount.toLocaleString('fr-FR')} {o.currency})
+                    </span>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center gap-2 pt-1">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentMode('FULL');
+                    setAmount(String(selectedInvoiceSummary.remainingAmount));
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                    paymentMode === 'FULL'
+                      ? 'bg-blue-700 text-white border-blue-700'
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  Règlement total du solde ({selectedInvoiceSummary.remainingAmount.toLocaleString('fr-FR')} {selectedInvoice.currency})
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPaymentMode('PARTIAL');
+                  }}
+                  className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                    paymentMode === 'PARTIAL'
+                      ? 'bg-amber-600 text-white border-amber-600'
+                      : 'bg-white text-slate-700 border-slate-300 hover:bg-slate-50'
+                  }`}
+                >
+                  Règlement partiel (tranche / plusieurs ordres)
+                </button>
+              </div>
+
+              {exceedsBalance && (
+                <div className="text-xs text-rose-700 font-semibold flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>
+                    Le montant saisi dépasse le solde restant de la facture ({selectedInvoiceSummary.remainingAmount.toLocaleString('fr-FR')} {selectedInvoice.currency}).
+                  </span>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+      </div>
 
       {/* SECTION A: Informations Générales */}
       <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-2xs space-y-4">
@@ -482,11 +746,17 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
               Devise de Facturation <span className="text-rose-500">*</span>
+              {selectedInvoice && (
+                <span className="ml-1.5 inline-flex items-center gap-0.5 text-[10px] text-blue-700 font-medium">
+                  <Lock className="w-2.5 h-2.5" /> Facture
+                </span>
+              )}
             </label>
             <select
               value={currency}
+              disabled={Boolean(selectedInvoice)}
               onChange={e => setCurrency(e.target.value as any)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-bold text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600 disabled:opacity-75 disabled:cursor-not-allowed"
             >
               <option value="EUR">Euro (EUR - €)</option>
               <option value="USD">Dollar US (USD - $)</option>
@@ -507,7 +777,18 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
               step="0.01"
               placeholder="0.00"
               value={amount}
-              onChange={e => setAmount(e.target.value)}
+              onChange={e => {
+                const val = e.target.value;
+                setAmount(val);
+                if (selectedInvoiceSummary) {
+                  const num = parseFloat(val);
+                  if (!isNaN(num) && Math.abs(num - selectedInvoiceSummary.remainingAmount) > 0.005) {
+                    setPaymentMode('PARTIAL');
+                  } else if (!isNaN(num) && Math.abs(num - selectedInvoiceSummary.remainingAmount) <= 0.005) {
+                    setPaymentMode('FULL');
+                  }
+                }
+              }}
               className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
             />
           </div>

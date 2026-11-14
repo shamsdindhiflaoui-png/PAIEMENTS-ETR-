@@ -1,4 +1,5 @@
 import {
+  CurrencyConsultation,
   ExchangeQuote,
   PaymentOrder,
   PaymentStatus,
@@ -88,7 +89,7 @@ export const ALLOWED_TRANSITIONS: Record<PaymentStatus, PaymentStatus[]> = {
   TRANSMIS_SIGNATURE: ['SIGNE', 'SAISI', 'ANNULE'],
   SIGNE: ['DEPOSE_BANQUE', 'EN_ATTENTE_ACHAT_DEVISE', 'SAISI', 'ANNULE'],
   DEPOSE_BANQUE: ['EXECUTE', 'ANNULE'],
-  EN_ATTENTE_ACHAT_DEVISE: ['DEPOSE_BANQUE', 'EXECUTE', 'ANNULE'],
+  EN_ATTENTE_ACHAT_DEVISE: ['DEPOSE_BANQUE', 'ANNULE'],
   EXECUTE: [],
   ANNULE: [],
 };
@@ -99,6 +100,82 @@ export const ALLOWED_TRANSITIONS: Record<PaymentStatus, PaymentStatus[]> = {
  */
 export function getDepositTargetStatus(requiresRateNegotiation?: boolean): PaymentStatus {
   return requiresRateNegotiation ? 'EN_ATTENTE_ACHAT_DEVISE' : 'DEPOSE_BANQUE';
+}
+
+/**
+ * Vérifie si un ordre peut être exécuté :
+ * - L'ordre doit être au statut « Déposé à la banque » (DEPOSE_BANQUE).
+ * - Si la négociation du cours est exigée (requiresRateNegotiation = true),
+ *   la consultation d'achat de devises doit impérativement être clôturée
+ *   (exchangeTransaction.status === 'VALIDE' et aucune consultation ouverte bloquante).
+ */
+export function canExecuteOrder(
+  order: Pick<PaymentOrder, 'id' | 'status' | 'requiresRateNegotiation' | 'exchangeTransaction'>,
+  consultations?: Array<
+    Pick<CurrencyConsultation, 'orderIds' | 'status' | 'consultationNumber'> & { id?: string }
+  >
+): {
+  allowed: boolean;
+  reason?: string;
+  openConsultationId?: string;
+  openConsultationNumber?: string;
+} {
+  if (order.status === 'EXECUTE' || order.status === 'ANNULE') {
+    return {
+      allowed: false,
+      reason: `Impossible d'exécuter un ordre déjà au statut « ${STATUS_META[order.status]?.label || order.status} ».`,
+    };
+  }
+
+  const relatedConsultations = consultations
+    ? consultations.filter(c => c.orderIds.includes(order.id) && c.status !== 'ANNULEE')
+    : [];
+  const openConsultation = relatedConsultations.find(c => c.status === 'OUVERTE');
+  const hasClosedConsultation = relatedConsultations.some(c => c.status === 'CLOTUREE');
+
+  if (order.requiresRateNegotiation) {
+    if (order.status === 'EN_ATTENTE_ACHAT_DEVISE') {
+      return {
+        allowed: false,
+        openConsultationId: openConsultation?.id,
+        openConsultationNumber: openConsultation?.consultationNumber,
+        reason: openConsultation
+          ? `Exécution bloquée : la négociation du cours est exigée et la consultation ${openConsultation.consultationNumber} n'est pas encore clôturée.`
+          : "Exécution bloquée : la négociation du cours est exigée. Veuillez créer et clôturer la consultation d'achat de devises avant d'exécuter cet ordre.",
+      };
+    }
+
+    if (order.status !== 'DEPOSE_BANQUE') {
+      return {
+        allowed: false,
+        reason: "L'ordre doit être déposé à la banque et la consultation clôturée avant toute exécution SWIFT.",
+      };
+    }
+
+    const isValidated =
+      order.exchangeTransaction?.status === 'VALIDE' || hasClosedConsultation;
+    if (!isValidated || openConsultation) {
+      return {
+        allowed: false,
+        openConsultationId: openConsultation?.id,
+        openConsultationNumber: openConsultation?.consultationNumber,
+        reason: openConsultation
+          ? `Exécution bloquée : la consultation ${openConsultation.consultationNumber} associée à cet ordre n'est pas encore clôturée.`
+          : "Exécution bloquée : la négociation du cours est exigée et aucune consultation clôturée n'a validé l'achat de devise.",
+      };
+    }
+
+    return { allowed: true };
+  }
+
+  if (order.status !== 'DEPOSE_BANQUE') {
+    return {
+      allowed: false,
+      reason: "L'ordre doit être au statut « Déposé à la banque » avant d'enregistrer l'exécution SWIFT.",
+    };
+  }
+
+  return { allowed: true };
 }
 
 export interface ConsultationUpdateForOrder {
@@ -264,6 +341,14 @@ export function canUserPerformTransition(
   toStatus: PaymentStatus,
   role: UserRole
 ): { allowed: boolean; reason?: string } {
+  if (fromStatus === 'EN_ATTENTE_ACHAT_DEVISE' && toStatus === 'EXECUTE') {
+    return {
+      allowed: false,
+      reason:
+        "Exécution impossible : la négociation du cours est exigée. Vous devez d'abord clôturer la consultation d'achat de devises.",
+    };
+  }
+
   if (role === 'ADMINISTRATEUR') {
     if (ALLOWED_TRANSITIONS[fromStatus]?.includes(toStatus)) {
       return { allowed: true };

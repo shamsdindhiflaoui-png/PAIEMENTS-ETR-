@@ -88,6 +88,37 @@ async function startServer() {
     }
   });
 
+  // 3b. Factures (Module 00)
+  app.get('/api/invoices', (req: Request, res: Response) => {
+    const isDemo =
+      req.query.isDemo === 'true'
+        ? true
+        : req.query.isDemo === 'false'
+        ? false
+        : 'ALL';
+    res.json(db.getInvoices({ isDemo }));
+  });
+
+  app.post('/api/invoices', (req: Request, res: Response) => {
+    try {
+      const user = getUserFromReq(req);
+      const invoice = db.createInvoice(req.body, user);
+      res.status(201).json(invoice);
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.delete('/api/invoices/:id', (req: Request, res: Response) => {
+    try {
+      const user = getUserFromReq(req);
+      db.deleteInvoice(req.params.id, user);
+      res.json({ success: true });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
+    }
+  });
+
   // 4. Ordres de paiement
   app.get('/api/orders', (req: Request, res: Response) => {
     const filters: FilterParams = {
