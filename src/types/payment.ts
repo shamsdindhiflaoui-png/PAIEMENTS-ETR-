@@ -76,11 +76,16 @@ export type DocumentType =
   | 'AVIS_DEBIT_SWIFT'
   | 'AUTRE';
 
+export type InvoiceDocumentBasis = 'FACTURE_DEFINITIVE' | 'PROFORMA';
+
+export type InvoicePaymentScheme = 'STANDARD' | '50_LC_50_VIREMENT';
+
 export interface PaymentDocument {
   id: string;
   orderId: string;
   name: string;
   type: DocumentType;
+  docRole?: InvoiceDocumentBasis | 'AUTRE';
   size: number;
   mimeType: string;
   uploadedAt: string;
@@ -95,6 +100,11 @@ export interface Invoice {
   id: string;
   invoiceNumber: string;
   invoiceDate: string;
+  proformaNumber?: string;
+  proformaDate?: string;
+  definitiveInvoiceNumber?: string;
+  definitiveInvoiceDate?: string;
+  paymentScheme?: InvoicePaymentScheme;
   dueDate?: string;
   contractNumber?: string;
   purpose: string;
@@ -254,6 +264,23 @@ export interface ExchangeTransaction {
   notes?: string;
 }
 
+export type OrderDeductionCategory =
+  | 'FRAIS_ENREGISTREMENT'
+  | 'RETENUE_SOURCE'
+  | 'PENALITE_RETARD'
+  | 'AVOIR_REMISE'
+  | 'FRAIS_BANCAIRES'
+  | 'DROITS_TIMBRE'
+  | 'AUTRE_DEDUCTION';
+
+export interface OrderDeduction {
+  id: string;
+  category: OrderDeductionCategory;
+  label: string;
+  amount: number;
+  reference?: string;
+}
+
 export interface PaymentOrder {
   id: string;
   orderNumber: string; // Structure: 000 UTILISATEUR 000 ANNEE 0000 ORDRE (ex: 001-026-0001)
@@ -280,8 +307,14 @@ export interface PaymentOrder {
 
   // Données financières
   invoiceId?: string; // Référence vers la facture source (Module Factures)
+  documentBasis?: InvoiceDocumentBasis; // Document support de cet ordre : PROFORMA (ex: LC 50%) ou FACTURE_DEFINITIVE (ex: Virement 50%)
+  proformaNumber?: string; // Rappel N° Proforma du dossier associé
+  proformaDate?: string; // Rappel Date Proforma
   currency: 'EUR' | 'USD' | 'GBP' | 'CHF' | 'CAD' | 'JPY' | 'TND';
-  amount: number;
+  grossAmount?: number; // Montant brut imputé sur la facture (net + déductions)
+  deductions?: OrderDeduction[]; // Déductions, frais d'enregistrement, retenues, avoirs...
+  deductionsTotal?: number; // Total des déductions appliquées
+  amount: number; // Montant net à transférer
   amountInWords: string;
   transferPurpose: string;
   invoiceNumber: string;

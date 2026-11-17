@@ -737,12 +737,12 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
   const headerY = 14;
   const headerH = 31;
 
-  doc.setFillColor(244, 246, 200);
-  doc.setDrawColor(70, 70, 70);
-  doc.setLineWidth(0.28);
+  doc.setFillColor(246, 246, 246);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.35);
   doc.rect(headerX, headerY, headerW, headerH, 'FD');
 
-  doc.setTextColor(15, 15, 15);
+  doc.setTextColor(0, 0, 0);
   doc.setFont('times', 'bolditalic');
   doc.setFontSize(11.5);
   doc.text('MANUFACTURE DES TABACS DE KAIROUAN', pageWidth / 2, headerY + 5.5, { align: 'center' });
@@ -760,7 +760,7 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
   const emailW = doc.getTextWidth(emailLabel);
   const emailX = pageWidth / 2 - emailW / 2;
   doc.text(emailLabel, emailX, headerY + 26.5);
-  doc.setDrawColor(15, 15, 15);
+  doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.25);
   doc.line(emailX + doc.getTextWidth('Email : '), headerY + 27.2, emailX + emailW, headerY + 27.2);
 
@@ -772,8 +772,8 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
   const c3W = 16;
   const c4W = contentWidth - c1W - c2W - c3W;
 
-  doc.setDrawColor(70, 70, 70);
-  doc.setLineWidth(0.25);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.3);
   doc.rect(marginX, tableY, contentWidth, rowH * 3);
   doc.line(marginX, tableY + rowH, marginX + contentWidth, tableY + rowH);
   doc.line(marginX, tableY + rowH * 2, marginX + contentWidth, tableY + rowH * 2);
@@ -783,16 +783,13 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
 
   doc.setFontSize(10.5);
   doc.setFont('times', 'bolditalic');
+  doc.setTextColor(0, 0, 0);
   doc.text('DEST :', marginX + 2, tableY + 4.8);
   doc.text('ADRESSE :', marginX + 2, tableY + rowH + 4.8);
   doc.text('DATE :', marginX + 2, tableY + rowH * 2 + 4.8);
 
   doc.text(pdfSafeText(letter.destLabel), marginX + c1W + 2, tableY + 4.8);
-  if (letter.addressLabel.includes('@')) {
-    doc.setTextColor(29, 78, 216);
-  }
   doc.text(pdfSafeText(letter.addressLabel), marginX + c1W + 2, tableY + rowH + 4.8);
-  doc.setTextColor(15, 15, 15);
   doc.text(pdfSafeText(formatConsultationDate(letter.confirmationDate)), marginX + c1W + 2, tableY + rowH * 2 + 4.8);
 
   doc.text('FAX :', marginX + c1W + c2W + 2, tableY + 4.8);
@@ -805,15 +802,17 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
   }
   doc.text(pdfSafeText(letter.confirmationRef), marginX + c1W + c2W + c3W + 2, tableY + rowH * 2 + 4.8);
 
-  // 3. Second Pale-Yellow Expediteur Box
+  // 3. Second Expediteur Box
   const expY = tableY + rowH * 3 + 4;
   const expH = 10.5;
-  doc.setFillColor(244, 246, 200);
-  doc.setDrawColor(70, 70, 70);
+  doc.setFillColor(246, 246, 246);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.35);
   doc.rect(marginX + 4, expY, contentWidth - 8, expH, 'FD');
 
   doc.setFont('times', 'bolditalic');
   doc.setFontSize(8.5);
+  doc.setTextColor(0, 0, 0);
   doc.text('EXPEDITEUR : DIRECTION FINANCIERE', pageWidth / 2, expY + 4.2, { align: 'center' });
   doc.text(
     "N.B. : En cas d'illisibilité du message, Veuillez nous contacter au (77) 281.309",
@@ -900,26 +899,26 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
     }
     let cursorX = marginX;
     doc.setFont('helvetica', 'bold');
-    doc.setTextColor(30, 64, 175);
+    doc.setTextColor(0, 0, 0);
     doc.text(typeTag, cursorX, emailY);
     cursorX += doc.getTextWidth(typeTag);
 
     if (personPrefix) {
       doc.setFont('helvetica', 'bold');
-      doc.setTextColor(51, 65, 85);
+      doc.setTextColor(35, 35, 35);
       doc.text(personPrefix, cursorX, emailY);
       cursorX += doc.getTextWidth(personPrefix);
     }
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(29, 78, 216);
+    doc.setTextColor(0, 0, 0);
     doc.text(cleanEm, cursorX, emailY);
     const w = doc.getTextWidth(cleanEm);
-    doc.setDrawColor(29, 78, 216);
+    doc.setDrawColor(0, 0, 0);
     doc.setLineWidth(0.25);
     doc.line(cursorX, emailY + 0.7, cursorX + w, emailY + 0.7);
     emailY += lineStep;
   }
-  doc.setTextColor(15, 15, 15);
+  doc.setTextColor(0, 0, 0);
 }
 
 export function buildPurchaseConfirmationPdfDocument(letters: PurchaseConfirmationLetter[]): jsPDF {

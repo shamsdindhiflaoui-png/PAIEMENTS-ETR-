@@ -21,9 +21,19 @@ import {
   Info,
   DollarSign,
   Ban,
+  Plus,
+  Trash2,
+  Pencil,
+  Save,
+  X,
+  MinusCircle,
 } from 'lucide-react';
 import {
+  Bank,
   CurrencyConsultation,
+  Invoice,
+  OrderDeduction,
+  OrderDeductionCategory,
   PaymentOrder,
   User,
   PaymentStatus,
@@ -35,9 +45,23 @@ import {
   formatForeignCurrency,
   formatTndCurrency,
 } from '../utils/workflowRules';
+import {
+  DEDUCTION_CATEGORY_META,
+  canEditOrderDeductions,
+  getOrderDeductionsTotal,
+  getOrderInvoiceGrossAmount,
+  validateExistingOrderDeductionsUpdate,
+} from '../utils/invoiceUtils';
+import { numberToFrenchWords } from '../utils/numberToFrenchWords';
+import { canUserManageOrder, isAdministrator } from '../utils/adminRules';
+import { AdminEditOrderModal } from './AdminEditOrderModal';
+import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
 
 interface OrderDetailViewProps {
   order: PaymentOrder;
+  allOrders?: PaymentOrder[];
+  banks?: Bank[];
+  linkedInvoice?: Invoice;
   consultations?: CurrencyConsultation[];
   currentUser: User;
   onBack: () => void;
@@ -47,10 +71,19 @@ interface OrderDetailViewProps {
   onOpenConsultations?: (consultationId?: string) => void;
   onPrintOrder: () => void;
   onAddDocument: (doc: any) => Promise<void>;
+  onUpdateDeductions?: (payload: {
+    deductions: OrderDeduction[];
+    grossAmount?: number;
+  }) => Promise<void>;
+  onUpdateOrder?: (id: string, payload: Partial<PaymentOrder>) => Promise<void>;
+  onDeleteOrder?: (id: string) => Promise<void>;
 }
 
 export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
   order,
+  allOrders = [],
+  banks = [],
+  linkedInvoice,
   consultations = [],
   currentUser,
   onBack,
@@ -60,11 +93,175 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
   onOpenConsultations,
   onPrintOrder,
   onAddDocument,
+  onUpdateDeductions,
+  onUpdateOrder,
+  onDeleteOrder,
 }) => {
   const [activeTab, setActiveTab] = useState<number>(1);
   const [cancelModalOpen, setCancelModalOpen] = useState<boolean>(false);
   const [cancelReason, setCancelReason] = useState<string>('');
   const [uploadDocType, setUploadDocType] = useState<DocumentType>('AUTRE');
+  const [adminEditOpen, setAdminEditOpen] = useState<boolean>(false);
+  const [adminDeleteOpen, setAdminDeleteOpen] = useState<boolean>(false);
+
+  const isAdmin = isAdministrator(currentUser);
+  const canManageOrder = canUserManageOrder(currentUser, order).allowed;
+
+  // Inline editing of deductions / registration fees directly on this single order
+  const [isEditingDeductions, setIsEditingDeductions] = useState<boolean>(false);
+  const [draftGrossAmount, setDraftGrossAmount] = useState<string>('');
+  const [draftDeductions, setDraftDeductions] = useState<
+    Array<{
+      id: string;
+      category: OrderDeductionCategory;
+      label: string;
+      reference: string;
+      amount: string;
+    }>
+  >([]);
+  const [deductionError, setDeductionError] = useState<string>('');
+  const [isSavingDeductions, setIsSavingDeductions] = useState<boolean>(false);
+
+  React.useEffect(() => {
+    setIsEditingDeductions(false);
+    setDeductionError('');
+  }, [order.id]);
+
+  const deductionsEditCheck = canEditOrderDeductions(order);
+  const canEditDeductions = Boolean(onUpdateDeductions && deductionsEditCheck.allowed);
+
+  const openDeductionsEditor = (initialCategory?: OrderDeductionCategory) => {
+    setActiveTab(3);
+    setDraftGrossAmount(String(getOrderInvoiceGrossAmount(order)));
+    const existingRows = (order.deductions || []).map(d => ({
+      id: d.id,
+      category: d.category,
+      label: d.label,
+      reference: d.reference || '',
+      amount: String(d.amount),
+    }));
+    if (existingRows.length === 0 || initialCategory) {
+      const cat = initialCategory || 'FRAIS_ENREGISTREMENT';
+      existingRows.push({
+        id: 'ded_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        category: cat,
+        label: DEDUCTION_CATEGORY_META[cat].label,
+        reference: '',
+        amount: '',
+      });
+    }
+    setDraftDeductions(existingRows);
+    setDeductionError('');
+    setIsEditingDeductions(true);
+  };
+
+  const handleAddDraftDeduction = (category: OrderDeductionCategory = 'FRAIS_ENREGISTREMENT') => {
+    setDraftDeductions(prev => [
+      ...prev,
+      {
+        id: 'ded_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        category,
+        label: DEDUCTION_CATEGORY_META[category].label,
+        reference: '',
+        amount: '',
+      },
+    ]);
+    setDeductionError('');
+  };
+
+  const handleUpdateDraftDeduction = (
+    id: string,
+    patch: Partial<{
+      category: OrderDeductionCategory;
+      label: string;
+      reference: string;
+      amount: string;
+    }>
+  ) => {
+    setDraftDeductions(prev =>
+      prev.map(row => {
+        if (row.id !== id) return row;
+        const nextCategory = patch.category ?? row.category;
+        let nextLabel = patch.label ?? row.label;
+        if (
+          patch.category &&
+          patch.label === undefined &&
+          row.label === DEDUCTION_CATEGORY_META[row.category]?.label
+        ) {
+          nextLabel = DEDUCTION_CATEGORY_META[patch.category].label;
+        }
+        return {
+          ...row,
+          ...patch,
+          category: nextCategory,
+          label: nextLabel,
+        };
+      })
+    );
+    setDeductionError('');
+  };
+
+  const handleRemoveDraftDeduction = (id: string) => {
+    setDraftDeductions(prev => prev.filter(r => r.id !== id));
+    setDeductionError('');
+  };
+
+  const handleSaveDeductions = async () => {
+    if (!onUpdateDeductions) return;
+    setDeductionError('');
+
+    const parsedGross = parseFloat(draftGrossAmount);
+    if (!Number.isFinite(parsedGross) || parsedGross <= 0) {
+      setDeductionError("Le montant brut imputé doit être strictement supérieur à 0.");
+      return;
+    }
+
+    const parsedRows: Array<Partial<OrderDeduction>> = [];
+    for (let i = 0; i < draftDeductions.length; i += 1) {
+      const row = draftDeductions[i];
+      if (row.amount.trim() === '') continue;
+      const numAmt = Number(row.amount);
+      if (!Number.isFinite(numAmt) || numAmt < 0) {
+        setDeductionError(`Montant invalide sur la déduction ligne ${i + 1}.`);
+        return;
+      }
+      if (numAmt > 0) {
+        parsedRows.push({
+          id: row.id,
+          category: row.category,
+          label: row.label,
+          reference: row.reference,
+          amount: numAmt,
+        });
+      }
+    }
+
+    const check = validateExistingOrderDeductionsUpdate({
+      order,
+      invoice: linkedInvoice,
+      allOrders: allOrders.length > 0 ? allOrders : [order],
+      deductions: parsedRows,
+      grossAmount: parsedGross,
+    });
+
+    if (!check.valid) {
+      setDeductionError(check.error || 'Erreur de validation des déductions.');
+      return;
+    }
+
+    try {
+      setIsSavingDeductions(true);
+      await onUpdateDeductions({
+        deductions: check.normalizedDeductions,
+        grossAmount: check.grossAmount,
+      });
+      setIsEditingDeductions(false);
+    } catch (err: any) {
+      setDeductionError(err?.message || 'Erreur lors de la mise à jour des déductions.');
+    } finally {
+      setIsSavingDeductions(false);
+    }
+  };
 
   const execCheck = canExecuteOrder(order, consultations);
   const meta = STATUS_META[order.status] || STATUS_META.SAISI;
@@ -153,6 +350,18 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
             <Printer className="w-4 h-4 text-slate-600" />
             <span>Imprimer Ordre</span>
           </button>
+
+          {/* Direct Deductions / Fees Button on existing single order */}
+          {canEditDeductions && (
+            <button
+              type="button"
+              onClick={() => openDeductionsEditor()}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors shadow-2xs"
+            >
+              <MinusCircle className="w-4 h-4 text-amber-700" />
+              <span>Déductions / Frais</span>
+            </button>
+          )}
 
           {/* Action 1: Transmit for signature if SAISI */}
           {order.status === 'SAISI' && (
@@ -258,6 +467,39 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
             >
               <Ban className="w-3.5 h-3.5" />
               <span>Annuler</span>
+            </button>
+          )}
+
+          {/* Action 6: Administrator or Creator Edit & Delete */}
+          {canManageOrder && onUpdateOrder && (
+            <button
+              type="button"
+              onClick={() => setAdminEditOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors shadow-2xs"
+              title={
+                isAdmin
+                  ? "Modifier les informations de l'ordre (Administrateur)"
+                  : 'Modifier mon ordre de paiement'
+              }
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              <span>Modifier</span>
+            </button>
+          )}
+
+          {canManageOrder && onDeleteOrder && (
+            <button
+              type="button"
+              onClick={() => setAdminDeleteOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-rose-700 bg-white hover:bg-rose-50 border border-rose-300 rounded-lg transition-colors shadow-2xs"
+              title={
+                isAdmin
+                  ? 'Supprimer définitivement cet ordre (Administrateur)'
+                  : 'Supprimer définitivement mon ordre'
+              }
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Supprimer</span>
             </button>
           )}
         </div>
@@ -521,17 +763,30 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
           )}
 
           {/* TAB 3: Financier & Domiciliation */}
-          {activeTab === 3 && (
+          {activeTab === 3 && (() => {
+            const dedTotal = getOrderDeductionsTotal(order);
+            const grossAmt = getOrderInvoiceGrossAmount(order);
+            const hasDeductions =
+              dedTotal > 0 || (Array.isArray(order.deductions) && order.deductions.length > 0);
+            return (
             <div className="space-y-6">
               {/* Highlight Amount Box */}
               <div className="p-6 rounded-xl bg-blue-50/70 border border-blue-200 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
                 <div>
                   <div className="text-xs font-semibold uppercase tracking-wider text-blue-800">
-                    Montant du Virement International
+                    {hasDeductions
+                      ? 'Montant Net du Virement International (après déductions)'
+                      : 'Montant du Virement International'}
                   </div>
                   <div className="text-3xl font-bold font-mono tabular-nums text-blue-950 mt-1">
                     {formatForeignCurrency(order.amount, order.currency)}
                   </div>
+                  {hasDeductions && (
+                    <div className="text-xs text-blue-900/80 mt-1 font-mono">
+                      Brut imputé facture : {formatForeignCurrency(grossAmt, order.currency)} ·
+                      Déductions : −{formatForeignCurrency(dedTotal, order.currency)}
+                    </div>
+                  )}
                 </div>
                 <div className="sm:text-right">
                   <div className="text-xs text-slate-500">Devise de règlement</div>
@@ -549,6 +804,430 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                 </div>
               </div>
 
+              {/* Décompte Déductions / Frais sur cet ordre */}
+              {(() => {
+                const draftGrossNum = parseFloat(draftGrossAmount) || 0;
+                const draftDedSum = Number(
+                  draftDeductions
+                    .reduce((sum, d) => {
+                      const val = parseFloat(d.amount);
+                      return sum + (Number.isFinite(val) && val > 0 ? val : 0);
+                    }, 0)
+                    .toFixed(2)
+                );
+                const draftNetNum = Number((draftGrossNum - draftDedSum).toFixed(2));
+                const liveValidation = isEditingDeductions
+                  ? validateExistingOrderDeductionsUpdate({
+                      order,
+                      invoice: linkedInvoice,
+                      allOrders: allOrders.length > 0 ? allOrders : [order],
+                      deductions: draftDeductions.map(d => ({
+                        id: d.id,
+                        category: d.category,
+                        label: d.label,
+                        reference: d.reference,
+                        amount: parseFloat(d.amount) || 0,
+                      })),
+                      grossAmount: draftGrossNum,
+                    })
+                  : null;
+
+                return (
+                  <div className="p-4 rounded-xl bg-amber-50/50 border border-amber-200 space-y-3">
+                    <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-amber-200/70">
+                      <div>
+                        <span className="text-xs font-bold text-amber-950 uppercase tracking-wider">
+                          Décompte Facture : Déductions & Frais Appliqués
+                        </span>
+                        <p className="text-[11px] text-amber-900/75 mt-0.5">
+                          Ajoutez ou ajustez des frais d&apos;enregistrement, retenues ou pénalités directement sur cet ordre sans en créer un nouveau.
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        {!isEditingDeductions && (
+                          <span className="text-xs font-mono font-bold text-amber-900">
+                            {hasDeductions
+                              ? `Total déduit : −${formatForeignCurrency(dedTotal, order.currency)}`
+                              : 'Aucune déduction appliquée'}
+                          </span>
+                        )}
+                        {!isEditingDeductions && canEditDeductions && (
+                          <button
+                            type="button"
+                            onClick={() => openDeductionsEditor()}
+                            className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 hover:bg-slate-800 text-white transition-colors shadow-2xs"
+                          >
+                            {hasDeductions ? (
+                              <>
+                                <Pencil className="w-3.5 h-3.5" />
+                                <span>Modifier les déductions</span>
+                              </>
+                            ) : (
+                              <>
+                                <Plus className="w-3.5 h-3.5" />
+                                <span>Ajouter déduction / frais</span>
+                              </>
+                            )}
+                          </button>
+                        )}
+                        {!isEditingDeductions && !deductionsEditCheck.allowed && (
+                          <span
+                            title={deductionsEditCheck.reason}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-[11px] font-medium bg-white border border-slate-200 text-slate-500"
+                          >
+                            <Lock className="w-3 h-3" />
+                            <span>Verrouillé</span>
+                          </span>
+                        )}
+                      </div>
+                    </div>
+
+                    {isEditingDeductions ? (
+                      <div className="space-y-3 bg-white p-4 rounded-xl border border-amber-200">
+                        {deductionError && (
+                          <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                            <AlertTriangle className="w-4 h-4 text-rose-600 shrink-0" />
+                            <span>{deductionError}</span>
+                          </div>
+                        )}
+
+                        {/* Optional gross amount input + linked invoice cap */}
+                        <div className="p-3 rounded-lg bg-slate-50 border border-slate-200 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                          <div>
+                            <label
+                              htmlFor="editOrderGrossAmount"
+                              className="block text-xs font-bold text-slate-800"
+                            >
+                              Montant brut imputé sur l&apos;ordre ({order.currency})
+                            </label>
+                            <p className="text-[11px] text-slate-500">
+                              {linkedInvoice && liveValidation?.maxAllowedGross !== undefined
+                                ? `Facture ${linkedInvoice.invoiceNumber} — Maximum imputable disponible : ${formatForeignCurrency(
+                                    liveValidation.maxAllowedGross,
+                                    order.currency
+                                  )}`
+                                : 'Le montant net à transférer sera recalculé automatiquement (Brut − Déductions).'}
+                            </p>
+                          </div>
+                          <input
+                            id="editOrderGrossAmount"
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            value={draftGrossAmount}
+                            onChange={e => {
+                              setDraftGrossAmount(e.target.value);
+                              setDeductionError('');
+                            }}
+                            className="w-full sm:w-48 bg-white border border-slate-300 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-slate-900 text-right focus:outline-none focus:ring-2 focus:ring-blue-600"
+                          />
+                        </div>
+
+                        {/* Quick-add preset buttons */}
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[11px] text-slate-500 mr-1">Ajout rapide :</span>
+                            {(
+                              [
+                                'FRAIS_ENREGISTREMENT',
+                                'RETENUE_SOURCE',
+                                'PENALITE_RETARD',
+                                'AVOIR_REMISE',
+                                'FRAIS_BANCAIRES',
+                                'DROITS_TIMBRE',
+                                'AUTRE_DEDUCTION',
+                              ] as OrderDeductionCategory[]
+                            ).map(cat => (
+                              <button
+                                key={cat}
+                                type="button"
+                                onClick={() => handleAddDraftDeduction(cat)}
+                                className="px-2 py-1 rounded-md text-[11px] font-medium bg-slate-50 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 hover:border-blue-300 transition-colors"
+                              >
+                                + {DEDUCTION_CATEGORY_META[cat].shortLabel}
+                              </button>
+                            ))}
+                          </div>
+
+                          <button
+                            type="button"
+                            onClick={() => handleAddDraftDeduction('FRAIS_ENREGISTREMENT')}
+                            className="inline-flex items-center gap-1 px-2.5 py-1 rounded-md text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800"
+                          >
+                            <Plus className="w-3.5 h-3.5" />
+                            <span>Ajouter ligne</span>
+                          </button>
+                        </div>
+
+                        {/* Editable Deduction Rows */}
+                        {draftDeductions.length > 0 ? (
+                          <div className="space-y-2">
+                            {draftDeductions.map((ded, idx) => {
+                              const catMeta = DEDUCTION_CATEGORY_META[ded.category];
+                              return (
+                                <div
+                                  key={ded.id}
+                                  className="grid grid-cols-1 md:grid-cols-12 gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200 items-end"
+                                >
+                                  <div className="md:col-span-3">
+                                    <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                                      Nature / Catégorie
+                                    </label>
+                                    <select
+                                      aria-label={`Catégorie déduction ${idx + 1}`}
+                                      value={ded.category}
+                                      onChange={e =>
+                                        handleUpdateDraftDeduction(ded.id, {
+                                          category: e.target.value as OrderDeductionCategory,
+                                        })
+                                      }
+                                      className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                                    >
+                                      {(
+                                        Object.keys(
+                                          DEDUCTION_CATEGORY_META
+                                        ) as OrderDeductionCategory[]
+                                      ).map(catKey => (
+                                        <option key={catKey} value={catKey}>
+                                          {DEDUCTION_CATEGORY_META[catKey].label}
+                                        </option>
+                                      ))}
+                                    </select>
+                                  </div>
+
+                                  <div className="md:col-span-4">
+                                    <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                                      Libellé / Motif de la déduction
+                                    </label>
+                                    <input
+                                      type="text"
+                                      aria-label={`Libellé déduction ${idx + 1}`}
+                                      placeholder={catMeta.label}
+                                      value={ded.label}
+                                      onChange={e =>
+                                        handleUpdateDraftDeduction(ded.id, {
+                                          label: e.target.value,
+                                        })
+                                      }
+                                      className="w-full bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-2">
+                                    <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                                      Réf. pièce (optionnel)
+                                    </label>
+                                    <input
+                                      type="text"
+                                      aria-label={`Référence déduction ${idx + 1}`}
+                                      placeholder={catMeta.placeholderRef}
+                                      value={ded.reference}
+                                      onChange={e =>
+                                        handleUpdateDraftDeduction(ded.id, {
+                                          reference: e.target.value,
+                                        })
+                                      }
+                                      className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-2">
+                                    <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                                      Montant ({order.currency})
+                                    </label>
+                                    <input
+                                      type="number"
+                                      step="0.01"
+                                      min="0"
+                                      aria-label={`Montant déduction ${idx + 1}`}
+                                      placeholder="0.00"
+                                      value={ded.amount}
+                                      onChange={e =>
+                                        handleUpdateDraftDeduction(ded.id, {
+                                          amount: e.target.value,
+                                        })
+                                      }
+                                      className="w-full bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900 text-right focus:outline-none focus:ring-1 focus:ring-blue-600"
+                                    />
+                                  </div>
+
+                                  <div className="md:col-span-1 flex justify-end">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleRemoveDraftDeduction(ded.id)}
+                                      aria-label={`Supprimer la déduction ${ded.label || idx + 1}`}
+                                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-white rounded-md border border-transparent hover:border-rose-200 transition-colors"
+                                      title="Supprimer cette déduction"
+                                    >
+                                      <Trash2 className="w-4 h-4" />
+                                    </button>
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="text-xs text-slate-500 italic p-3 bg-slate-50 rounded-lg border border-dashed border-slate-200 text-center">
+                            Aucune ligne de déduction. Cliquez sur un bouton ci-dessus pour ajouter des frais ou enregistrez pour rétablir le montant net au brut.
+                          </div>
+                        )}
+
+                        {/* Live Preview Summary */}
+                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-slate-100 text-xs">
+                          <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
+                            <span className="text-slate-600">Brut imputé</span>
+                            <span className="font-mono font-bold text-slate-900">
+                              {formatForeignCurrency(draftGrossNum, order.currency)}
+                            </span>
+                          </div>
+                          <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-between">
+                            <span className="text-amber-800">Total déductions</span>
+                            <span className="font-mono font-bold text-amber-900">
+                              −{formatForeignCurrency(draftDedSum, order.currency)}
+                            </span>
+                          </div>
+                          <div
+                            className={`px-3 py-2 rounded-lg border flex items-center justify-between ${
+                              draftNetNum <= 0
+                                ? 'bg-rose-50 border-rose-200 text-rose-900'
+                                : 'bg-blue-50 border-blue-200 text-blue-950'
+                            }`}
+                          >
+                            <span className="font-semibold">Nouveau net à transférer</span>
+                            <span className="font-mono font-extrabold">
+                              {formatForeignCurrency(draftNetNum, order.currency)}
+                            </span>
+                          </div>
+                        </div>
+
+                        {draftNetNum > 0 && (
+                          <div className="text-[11px] text-slate-600 bg-slate-50 px-3 py-2 rounded-lg border border-slate-200 italic">
+                            <strong className="not-italic text-slate-700">
+                              Aperçu en toutes lettres :
+                            </strong>{' '}
+                            « {numberToFrenchWords(draftNetNum, order.currency)} »
+                          </div>
+                        )}
+
+                        {liveValidation && !liveValidation.valid && !deductionError && (
+                          <div className="text-[11px] text-rose-700 font-medium">
+                            {liveValidation.error}
+                          </div>
+                        )}
+
+                        <div className="flex items-center justify-end gap-2 pt-2 border-t border-slate-100">
+                          <button
+                            type="button"
+                            disabled={isSavingDeductions}
+                            onClick={() => {
+                              setIsEditingDeductions(false);
+                              setDeductionError('');
+                            }}
+                            className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-600 hover:bg-slate-100 rounded-lg border border-slate-200"
+                          >
+                            <X className="w-3.5 h-3.5" />
+                            <span>Annuler</span>
+                          </button>
+                          <button
+                            type="button"
+                            disabled={
+                              isSavingDeductions || Boolean(liveValidation && !liveValidation.valid)
+                            }
+                            onClick={handleSaveDeductions}
+                            className="inline-flex items-center gap-1.5 px-4 py-1.5 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-lg shadow-xs disabled:opacity-50"
+                          >
+                            <Save className="w-3.5 h-3.5" />
+                            <span>
+                              {isSavingDeductions
+                                ? 'Enregistrement...'
+                                : 'Enregistrer sur cet ordre'}
+                            </span>
+                          </button>
+                        </div>
+                      </div>
+                    ) : (
+                      <>
+                        {hasDeductions ? (
+                          <>
+                            {order.deductions && order.deductions.length > 0 && (
+                              <div className="overflow-x-auto bg-white rounded-lg border border-amber-200/80">
+                                <table className="w-full text-xs text-left">
+                                  <thead className="bg-amber-50/70 text-amber-900 font-semibold border-b border-amber-100">
+                                    <tr>
+                                      <th className="py-2 px-3">Nature</th>
+                                      <th className="py-2 px-3">Libellé</th>
+                                      <th className="py-2 px-3">Référence</th>
+                                      <th className="py-2 px-3 text-right">Montant déduit</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody className="divide-y divide-slate-100">
+                                    {order.deductions.map((d, idx) => (
+                                      <tr key={d.id || idx}>
+                                        <td className="py-2 px-3 font-medium text-slate-700 whitespace-nowrap">
+                                          {DEDUCTION_CATEGORY_META[d.category]?.shortLabel ||
+                                            d.category}
+                                        </td>
+                                        <td className="py-2 px-3 text-slate-900">{d.label}</td>
+                                        <td className="py-2 px-3 font-mono text-slate-500">
+                                          {d.reference || '—'}
+                                        </td>
+                                        <td className="py-2 px-3 text-right font-mono font-bold text-amber-900 whitespace-nowrap">
+                                          −{formatForeignCurrency(d.amount, order.currency)}
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            )}
+
+                            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs pt-1">
+                              <div className="bg-white rounded-lg p-2.5 border border-amber-100 flex items-center justify-between">
+                                <span className="text-slate-600">Brut imputé facture</span>
+                                <strong className="font-mono text-slate-900">
+                                  {formatForeignCurrency(grossAmt, order.currency)}
+                                </strong>
+                              </div>
+                              <div className="bg-white rounded-lg p-2.5 border border-amber-100 flex items-center justify-between">
+                                <span className="text-amber-800">Déductions / Frais</span>
+                                <strong className="font-mono text-amber-900">
+                                  −{formatForeignCurrency(dedTotal, order.currency)}
+                                </strong>
+                              </div>
+                              <div className="bg-white rounded-lg p-2.5 border border-blue-200 flex items-center justify-between">
+                                <span className="font-semibold text-blue-900">
+                                  Net à transférer
+                                </span>
+                                <strong className="font-mono text-blue-950">
+                                  {formatForeignCurrency(order.amount, order.currency)}
+                                </strong>
+                              </div>
+                            </div>
+                          </>
+                        ) : (
+                          <div className="text-xs text-slate-600 bg-white/80 rounded-lg p-3 border border-amber-100 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                            <span>
+                              {deductionsEditCheck.allowed
+                                ? "Aucune déduction ou frais d'enregistrement n'est encore appliqué à cet ordre."
+                                : deductionsEditCheck.reason}
+                            </span>
+                            {canEditDeductions && (
+                              <button
+                                type="button"
+                                onClick={() => openDeductionsEditor('FRAIS_ENREGISTREMENT')}
+                                className="text-xs font-semibold text-amber-800 hover:text-amber-950 underline self-start sm:self-auto"
+                              >
+                                + Ajouter des frais d&apos;enregistrement / retenue
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </>
+                    )}
+                  </div>
+                );
+              })()}
+
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div className="p-4 rounded-lg border border-slate-200 space-y-1">
                   <div className="text-[11px] font-medium text-slate-500 uppercase">Contrat / Marché</div>
@@ -556,8 +1235,29 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                 </div>
 
                 <div className="p-4 rounded-lg border border-slate-200 space-y-1">
-                  <div className="text-[11px] font-medium text-slate-500 uppercase">Réf Facture</div>
-                  <div className="text-xs font-mono font-bold text-slate-900">{order.invoiceNumber}</div>
+                  <div className="text-[11px] font-medium text-slate-500 uppercase">
+                    {order.documentBasis === 'PROFORMA'
+                      ? 'Réf. Proforma'
+                      : 'Réf. Facture Définitive'}
+                  </div>
+                  <div className="text-xs font-mono font-bold text-slate-900">
+                    {order.invoiceNumber}
+                    {order.invoiceDate ? (
+                      <span className="text-[11px] font-normal text-slate-500 ml-1">
+                        ({order.invoiceDate})
+                      </span>
+                    ) : null}
+                  </div>
+                  {order.documentBasis !== 'PROFORMA' &&
+                    (order.proformaNumber || linkedInvoice?.proformaNumber) &&
+                    (order.proformaNumber || linkedInvoice?.proformaNumber) !== order.invoiceNumber && (
+                      <div className="text-[11px] italic text-slate-600">
+                        sur Proforma {order.proformaNumber || linkedInvoice?.proformaNumber}
+                        {(order.proformaDate || linkedInvoice?.proformaDate)
+                          ? ` (${order.proformaDate || linkedInvoice?.proformaDate})`
+                          : ''}
+                      </div>
+                    )}
                 </div>
 
                 <div className="p-4 rounded-lg border border-slate-200 space-y-1">
@@ -593,7 +1293,8 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                 </div>
               </div>
             </div>
-          )}
+            );
+          })()}
 
           {/* TAB 4: Documents Justificatifs */}
           {activeTab === 4 && (
@@ -1004,6 +1705,34 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {adminEditOpen && onUpdateOrder && (
+        <AdminEditOrderModal
+          order={order}
+          banks={banks}
+          isAdmin={isAdmin}
+          onSave={onUpdateOrder}
+          onClose={() => setAdminEditOpen(false)}
+        />
+      )}
+
+      {adminDeleteOpen && onDeleteOrder && (
+        <AdminConfirmDeleteModal
+          title="Supprimer définitivement cet ordre de paiement"
+          entityRef={order.orderNumber}
+          description={`Vous êtes sur le point de supprimer l'ordre ${order.orderNumber} (${order.beneficiaryName} — ${formatForeignCurrency(order.amount, order.currency)}). Cette action est irréversible et sera journalisée.`}
+          warningNote={
+            order.exchangeTransaction?.consultationNumber
+              ? `Cet ordre est lié à la consultation ${order.exchangeTransaction.consultationNumber} : il en sera automatiquement détaché et le montant total de la consultation sera recalculé.`
+              : undefined
+          }
+          onConfirm={async () => {
+            await onDeleteOrder(order.id);
+            onBack();
+          }}
+          onClose={() => setAdminDeleteOpen(false)}
+        />
       )}
     </div>
   );

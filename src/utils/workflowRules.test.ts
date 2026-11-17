@@ -4,6 +4,7 @@ import {
   applyConsultationUpdateToOrder,
   canExecuteOrder,
   canUserPerformTransition,
+  computeNextStructuredOrderNumber,
   generateStructuredOrderNumber,
   getDepositTargetStatus,
   normalizeLegacyStatus,
@@ -69,6 +70,23 @@ test('order number generator produces compliant 000 UTILISATEUR 000 ANNEE 0000 O
   assert.equal(yearPart, '026');
   assert.equal(seqPart, '0042');
   assert.equal(orderNumber, '012-026-0042');
+});
+
+test('computeNextStructuredOrderNumber derives monotonic non-colliding sequence per year and userCode', () => {
+  const existing = [
+    { orderNumber: 'OP-2026-0001', fiscalYear: 2026 },
+    { orderNumber: 'OP-2026-0007', fiscalYear: 2026 },
+    { orderNumber: '002-026-0008', fiscalYear: 2026, yearCode: '026', orderSeq: '0008' },
+    { orderNumber: '001-025-0099', fiscalYear: 2025, yearCode: '025', orderSeq: '0099' },
+  ];
+  const next2026 = computeNextStructuredOrderNumber('001', 2026, existing);
+  assert.equal(next2026.userPart, '001');
+  assert.equal(next2026.yearPart, '026');
+  assert.equal(next2026.seqPart, '0009');
+  assert.equal(next2026.orderNumber, '001-026-0009');
+
+  const next2027 = computeNextStructuredOrderNumber('003', 2027, existing);
+  assert.equal(next2027.orderNumber, '003-027-0001');
 });
 
 function makeTestOrder(overrides: Partial<PaymentOrder> = {}): PaymentOrder {

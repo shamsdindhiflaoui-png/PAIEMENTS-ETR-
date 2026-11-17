@@ -4,8 +4,17 @@ import {
   computeInvoicePaymentSummary,
   validateOrderAgainstInvoice,
   getAvailableInvoicesForOrder,
+  normalizeOrderDeductions,
+  getOrderInvoiceGrossAmount,
+  getOrderDeductionsTotal,
+  canEditOrderDeductions,
+  validateExistingOrderDeductionsUpdate,
+  doesOrderBelongToInvoice,
+  findReferenceConflict,
+  getSuggestedNextTranche,
+  resolveOrderDocumentSnapshot,
 } from './invoiceUtils';
-import { Invoice, PaymentOrder } from '../types/payment';
+import { Invoice, OrderDeduction, PaymentOrder } from '../types/payment';
 
 const BASE_INVOICE: Invoice = {
   id: 'inv_1',
@@ -116,3 +125,383 @@ test('getAvailableInvoicesForOrder excludes fully paid invoices', () => {
   assert.equal(available[0].invoice.id, 'inv_open');
   assert.equal(available[0].summary.remainingAmount, 55000);
 });
+
+test('normalizeOrderDeductions cleans, defaults labels, and rejects negative deductions', () => {
+  const res = normalizeOrderDeductions([
+    { category: 'FRAIS_ENREGISTREMENT', label: '', amount: 450.126, reference: 'Q-2026-01' },
+    { category: 'PENALITE_RETARD', label: 'Retard livraison', amount: 1500 },
+    { category: 'AUTRE_DEDUCTION', label: 'Ignoré car zéro', amount: 0 },
+  ]);
+  assert.equal(res.error, undefined);
+  assert.equal(res.items.length, 2);
+  assert.equal(res.items[0].label, "Frais d'enregistrement");
+  assert.equal(res.items[0].amount, 450.13);
+  assert.equal(res.total, 1950.13);
+
+  const bad = normalizeOrderDeductions([
+    { category: 'FRAIS_ENREGISTREMENT', label: 'Test', amount: -50 },
+  ]);
+  assert.ok(bad.error);
+});
+
+test('invoice settlement with deductions imputes grossAmount to invoice while order transfers netAmount', () => {
+  const deductions: OrderDeduction[] = [
+    { id: 'd1', category: 'FRAIS_ENREGISTREMENT', label: "Frais d'enregistrement", amount: 500 },
+    { id: 'd2', category: 'RETENUE_SOURCE', label: 'Retenue à la source', amount: 1500 },
+  ];
+
+  // Validate full 100,000 USD settlement with 2,000 USD deductions -> net transfer 98,000 USD
+  const validation = validateOrderAgainstInvoice(
+    BASE_INVOICE,
+    [],
+    98000,
+    'USD',
+    deductions,
+    100000
+  );
+  assert.equal(validation.valid, true);
+  assert.equal(validation.deductionsTotal, 2000);
+  assert.equal(validation.grossAmount, 100000);
+
+  const orderWithDeductions = makeOrder({
+    id: 'ord_ded',
+    invoiceId: 'inv_1',
+    amount: 98000,
+    grossAmount: 100000,
+    deductionsTotal: 2000,
+    deductions,
+  });
+
+  assert.equal(getOrderDeductionsTotal(orderWithDeductions), 2000);
+  assert.equal(getOrderInvoiceGrossAmount(orderWithDeductions), 100000);
+
+  const summary = computeInvoicePaymentSummary(BASE_INVOICE, [orderWithDeductions]);
+  assert.equal(summary.allocatedAmount, 100000);
+  assert.equal(summary.netOrderedAmount, 98000);
+  assert.equal(summary.deductionsTotal, 2000);
+  assert.equal(summary.remainingAmount, 0);
+  assert.equal(summary.progressPercent, 100);
+  assert.equal(summary.paymentStatus, 'PAYEE');
+
+  // Cannot exceed remaining balance when net + deductions > remainingAmount
+  const partialOrder = makeOrder({
+    id: 'ord_p1',
+    invoiceId: 'inv_1',
+    amount: 48000,
+    grossAmount: 50000,
+    deductionsTotal: 2000,
+    deductions,
+  });
+  const overflowCheck = validateOrderAgainstInvoice(
+    BASE_INVOICE,
+    [partialOrder],
+    49000,
+    'USD',
+    [{ category: 'FRAIS_ENREGISTREMENT', label: "Frais d'enregistrement", amount: 2000 }]
+  );
+  assert.equal(overflowCheck.valid, false);
+  assert.match(overflowCheck.error || '', /dépasse le solde restant/i);
+});
+
+test('canEditOrderDeductions allows SAISI, TRANSMIS_SIGNATURE, SIGNE before deposit/consultation and blocks locked states', () => {
+  assert.equal(canEditOrderDeductions(makeOrder({ status: 'SAISI' })).allowed, true);
+  assert.equal(canEditOrderDeductions(makeOrder({ status: 'TRANSMIS_SIGNATURE' })).allowed, true);
+  assert.equal(canEditOrderDeductions(makeOrder({ status: 'SIGNE' })).allowed, true);
+
+  const deposited = canEditOrderDeductions(makeOrder({ status: 'DEPOSE_BANQUE' }));
+  assert.equal(deposited.allowed, false);
+  assert.match(deposited.reason || '', /déposé/i);
+
+  const waitingFx = canEditOrderDeductions(makeOrder({ status: 'EN_ATTENTE_ACHAT_DEVISE' }));
+  assert.equal(waitingFx.allowed, false);
+
+  const signedWithDeposit = canEditOrderDeductions(
+    makeOrder({
+      status: 'SIGNE',
+      deposit: {
+        id: 'dep_1',
+        orderId: 'ord_1',
+        bankId: 'b1',
+        bankName: 'STB',
+        depositDate: '2026-02-05',
+        slipNumber: 'B-1',
+        bankReference: 'R-1',
+        depositedBy: 'Agent',
+      },
+    })
+  );
+  assert.equal(signedWithDeposit.allowed, false);
+
+  const inConsultation = canEditOrderDeductions(
+    makeOrder({
+      status: 'SIGNE',
+      exchangeTransaction: {
+        id: 'ex_1',
+        orderId: 'ord_1',
+        consultationId: 'cons_1',
+        status: 'CONSULTATION_EN_COURS',
+      },
+    })
+  );
+  assert.equal(inConsultation.allowed, false);
+  assert.match(inConsultation.reason || '', /consultation/i);
+
+  assert.equal(canEditOrderDeductions(makeOrder({ status: 'EXECUTE' })).allowed, false);
+  assert.equal(canEditOrderDeductions(makeOrder({ status: 'ANNULE' })).allowed, false);
+});
+
+test('validateExistingOrderDeductionsUpdate adds, updates, and clears deductions on a single order without creating a new one', () => {
+  const existingOrder = makeOrder({
+    id: 'ord_single',
+    invoiceId: 'inv_1',
+    status: 'TRANSMIS_SIGNATURE',
+    amount: 100000,
+    grossAmount: 100000,
+    deductionsTotal: 0,
+    deductions: [],
+  });
+
+  // 1. Add Frais d'enregistrement + Retenue à la source -> gross stays 100,000, net drops to 97,500
+  const added = validateExistingOrderDeductionsUpdate({
+    order: existingOrder,
+    invoice: BASE_INVOICE,
+    allOrders: [existingOrder],
+    deductions: [
+      { category: 'FRAIS_ENREGISTREMENT', label: "Frais d'enregistrement", amount: 500, reference: 'Q-01' },
+      { category: 'RETENUE_SOURCE', label: 'Retenue RAS', amount: 2000 },
+    ],
+  });
+  assert.equal(added.valid, true);
+  assert.equal(added.grossAmount, 100000);
+  assert.equal(added.deductionsTotal, 2500);
+  assert.equal(added.netAmount, 97500);
+  assert.equal(added.normalizedDeductions.length, 2);
+
+  // Invoice summary remains 100,000 allocated (remaining 0) while netOrderedAmount is 97,500
+  const updatedOrder: PaymentOrder = {
+    ...existingOrder,
+    grossAmount: added.grossAmount,
+    deductionsTotal: added.deductionsTotal,
+    deductions: added.normalizedDeductions,
+    amount: added.netAmount,
+  };
+  const invSummary = computeInvoicePaymentSummary(BASE_INVOICE, [updatedOrder]);
+  assert.equal(invSummary.allocatedAmount, 100000);
+  assert.equal(invSummary.netOrderedAmount, 97500);
+  assert.equal(invSummary.deductionsTotal, 2500);
+  assert.equal(invSummary.remainingAmount, 0);
+
+  // 2. Clear deductions -> net restores cleanly to 100,000
+  const cleared = validateExistingOrderDeductionsUpdate({
+    order: updatedOrder,
+    invoice: BASE_INVOICE,
+    allOrders: [updatedOrder],
+    deductions: [],
+  });
+  assert.equal(cleared.valid, true);
+  assert.equal(cleared.grossAmount, 100000);
+  assert.equal(cleared.deductionsTotal, 0);
+  assert.equal(cleared.netAmount, 100000);
+});
+
+test('validateExistingOrderDeductionsUpdate enforces net > 0, positive amounts, invoice remaining cap, and unlocked status', () => {
+  const order1 = makeOrder({
+    id: 'ord_1',
+    invoiceId: 'inv_1',
+    status: 'SIGNE',
+    amount: 40000,
+    grossAmount: 40000,
+  });
+  const order2 = makeOrder({
+    id: 'ord_2',
+    invoiceId: 'inv_1',
+    status: 'EXECUTE',
+    amount: 50000,
+    grossAmount: 50000,
+  });
+
+  // Deductions >= gross rejected
+  const tooMuchDed = validateExistingOrderDeductionsUpdate({
+    order: order1,
+    invoice: BASE_INVOICE,
+    allOrders: [order1, order2],
+    deductions: [{ category: 'PENALITE_RETARD', label: 'Pénalité', amount: 40000 }],
+  });
+  assert.equal(tooMuchDed.valid, false);
+  assert.match(tooMuchDed.error || '', /net à transférer positif/i);
+
+  // Negative deduction rejected
+  const negativeDed = validateExistingOrderDeductionsUpdate({
+    order: order1,
+    invoice: BASE_INVOICE,
+    allOrders: [order1, order2],
+    deductions: [{ category: 'FRAIS_ENREGISTREMENT', label: 'Frais', amount: -100 }],
+  });
+  assert.equal(negativeDed.valid, false);
+
+  // Gross increase up to maxAllowedGross (100,000 - 50,000 = 50,000) succeeds, above fails
+  const validGrossIncrease = validateExistingOrderDeductionsUpdate({
+    order: order1,
+    invoice: BASE_INVOICE,
+    allOrders: [order1, order2],
+    grossAmount: 50000,
+    deductions: [{ category: 'FRAIS_ENREGISTREMENT', label: 'Enreg.', amount: 1200 }],
+  });
+  assert.equal(validGrossIncrease.valid, true);
+  assert.equal(validGrossIncrease.grossAmount, 50000);
+  assert.equal(validGrossIncrease.netAmount, 48800);
+
+  const exceedGrossIncrease = validateExistingOrderDeductionsUpdate({
+    order: order1,
+    invoice: BASE_INVOICE,
+    allOrders: [order1, order2],
+    grossAmount: 55000,
+    deductions: [{ category: 'FRAIS_ENREGISTREMENT', label: 'Enreg.', amount: 1200 }],
+  });
+  assert.equal(exceedGrossIncrease.valid, false);
+  assert.match(exceedGrossIncrease.error || '', /dépasse le solde disponible/i);
+
+  // Locked order rejected
+  const lockedUpdate = validateExistingOrderDeductionsUpdate({
+    order: order2,
+    invoice: BASE_INVOICE,
+    allOrders: [order1, order2],
+    deductions: [{ category: 'FRAIS_ENREGISTREMENT', label: 'Enreg.', amount: 500 }],
+  });
+  assert.equal(lockedUpdate.valid, false);
+  assert.match(lockedUpdate.error || '', /exécuté/i);
+});
+
+test('50% LC (Proforma) + 50% Virement (Facture Définitive) single dossier lifecycle keeps totalAmount fixed and prevents duplicates', () => {
+  const mixedProformaDossier: Invoice = {
+    ...BASE_INVOICE,
+    id: 'inv_mixed',
+    invoiceNumber: 'PROF-2026-500',
+    invoiceDate: '2026-03-01',
+    proformaNumber: 'PROF-2026-500',
+    proformaDate: '2026-03-01',
+    paymentScheme: '50_LC_50_VIREMENT',
+    totalAmount: 100000,
+  };
+
+  // Tranche 1 suggestion: 50% LC on Proforma
+  const summary0 = computeInvoicePaymentSummary(mixedProformaDossier, []);
+  const s1 = getSuggestedNextTranche(mixedProformaDossier, summary0);
+  assert.equal(s1.isMixedScheme, true);
+  assert.equal(s1.transferType, 'LC');
+  assert.equal(s1.documentBasis, 'PROFORMA');
+  assert.equal(s1.paymentMode, 'PARTIAL');
+  assert.equal(s1.suggestedGrossAmount, 50000);
+
+  const snap1 = resolveOrderDocumentSnapshot({
+    invoice: mixedProformaDossier,
+    documentBasis: s1.documentBasis,
+    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+  });
+  assert.equal(snap1.valid, true);
+  assert.equal(snap1.documentBasis, 'PROFORMA');
+  assert.equal(snap1.invoiceNumber, 'PROF-2026-500');
+  assert.equal(snap1.proformaNumber, 'PROF-2026-500');
+  assert.equal(snap1.invoiceDefinitiveAttach, undefined);
+
+  const lcOrder = makeOrder({
+    id: 'ord_lc_50',
+    invoiceId: 'inv_mixed',
+    documentBasis: 'PROFORMA',
+    invoiceNumber: 'PROF-2026-500',
+    invoiceDate: '2026-03-01',
+    proformaNumber: 'PROF-2026-500',
+    proformaDate: '2026-03-01',
+    transferType: 'LC',
+    lcNumber: 'LC-2026-099',
+    amount: 50000,
+    grossAmount: 50000,
+  });
+
+  // Tranche 2 suggestion after LC order: 50% VIREMENT on Facture Définitive
+  const summaryAfterLc = computeInvoicePaymentSummary(mixedProformaDossier, [lcOrder]);
+  assert.equal(summaryAfterLc.remainingAmount, 50000);
+  assert.equal(summaryAfterLc.progressPercent, 50);
+
+  const s2 = getSuggestedNextTranche(mixedProformaDossier, summaryAfterLc);
+  assert.equal(s2.transferType, 'VIREMENT');
+  assert.equal(s2.documentBasis, 'FACTURE_DEFINITIVE');
+  assert.equal(s2.paymentMode, 'FULL');
+  assert.equal(s2.suggestedGrossAmount, 50000);
+
+  // Attempting Tranche 2 without Facture Définitive must fail cleanly
+  const missingDef = resolveOrderDocumentSnapshot({
+    invoice: mixedProformaDossier,
+    documentBasis: 'FACTURE_DEFINITIVE',
+    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+  });
+  assert.equal(missingDef.valid, false);
+  assert.match(missingDef.error || '', /Facture Définitive/i);
+
+  // Conflict check against another invoice's number must fail
+  const conflictSnap = resolveOrderDocumentSnapshot({
+    invoice: mixedProformaDossier,
+    documentBasis: 'FACTURE_DEFINITIVE',
+    inlineDefinitiveNumber: 'FAC-2026-0100',
+    inlineDefinitiveDate: '2026-03-20',
+    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+  });
+  assert.equal(conflictSnap.valid, false);
+  assert.match(conflictSnap.error || '', /FAC-2026-0100/);
+
+  // Valid inline Facture Définitive attachment keeps totalAmount untouched and attaches metadata
+  const validSnap2 = resolveOrderDocumentSnapshot({
+    invoice: mixedProformaDossier,
+    documentBasis: 'FACTURE_DEFINITIVE',
+    inlineDefinitiveNumber: 'FAC-DEF-2026-777',
+    inlineDefinitiveDate: '2026-03-20',
+    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+  });
+  assert.equal(validSnap2.valid, true);
+  assert.equal(validSnap2.invoiceNumber, 'FAC-DEF-2026-777');
+  assert.equal(validSnap2.invoiceDate, '2026-03-20');
+  assert.equal(validSnap2.proformaNumber, 'PROF-2026-500');
+  assert.deepEqual(validSnap2.invoiceDefinitiveAttach, {
+    definitiveInvoiceNumber: 'FAC-DEF-2026-777',
+    definitiveInvoiceDate: '2026-03-20',
+  });
+
+  // Once Facture Définitive is attached on the single dossier, total remains 100,000 and both orders belong to it
+  const updatedDossier: Invoice = {
+    ...mixedProformaDossier,
+    invoiceNumber: 'FAC-DEF-2026-777',
+    invoiceDate: '2026-03-20',
+    definitiveInvoiceNumber: 'FAC-DEF-2026-777',
+    definitiveInvoiceDate: '2026-03-20',
+  };
+  const virementOrder = makeOrder({
+    id: 'ord_vir_50',
+    invoiceId: undefined, // even matched by ref number alone
+    documentBasis: 'FACTURE_DEFINITIVE',
+    invoiceNumber: 'FAC-DEF-2026-777',
+    invoiceDate: '2026-03-20',
+    proformaNumber: 'PROF-2026-500',
+    proformaDate: '2026-03-01',
+    transferType: 'VIREMENT',
+    amount: 50000,
+    grossAmount: 50000,
+  });
+  const lcOrderByRefOnly = { ...lcOrder, invoiceId: undefined };
+
+  assert.equal(doesOrderBelongToInvoice(lcOrderByRefOnly, updatedDossier), true);
+  assert.equal(doesOrderBelongToInvoice(virementOrder, updatedDossier), true);
+
+  const finalSummary = computeInvoicePaymentSummary(updatedDossier, [
+    lcOrderByRefOnly,
+    virementOrder,
+  ]);
+  assert.equal(finalSummary.allocatedAmount, 100000);
+  assert.equal(finalSummary.remainingAmount, 0);
+  assert.equal(finalSummary.progressPercent, 100);
+  assert.equal(finalSummary.paymentStatus, 'PAYEE');
+
+  assert.ok(findReferenceConflict(['PROF-2026-500'], [updatedDossier]));
+  assert.equal(findReferenceConflict(['PROF-2026-500'], [updatedDossier], 'inv_mixed'), null);
+});
+
+

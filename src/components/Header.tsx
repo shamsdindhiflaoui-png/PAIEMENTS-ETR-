@@ -1,5 +1,5 @@
 import React from 'react';
-import { FilePlus2, Download, RefreshCw, AlertCircle, Database } from 'lucide-react';
+import { FilePlus2, Download, RefreshCw, Database, LogOut } from 'lucide-react';
 import { NavItem } from './Sidebar';
 import { User } from '../types/payment';
 
@@ -10,6 +10,8 @@ interface HeaderProps {
   showDemoData: boolean;
   onToggleDemoData: (value: boolean) => void;
   onResetDemo: () => void;
+  onExportCsv: () => void;
+  onSignOut?: () => void;
   selectedOrderNumber?: string;
 }
 
@@ -20,6 +22,8 @@ export const Header: React.FC<HeaderProps> = ({
   showDemoData,
   onToggleDemoData,
   onResetDemo,
+  onExportCsv,
+  onSignOut,
   selectedOrderNumber,
 }) => {
   const getViewTitle = () => {
@@ -46,7 +50,7 @@ export const Header: React.FC<HeaderProps> = ({
   };
 
   return (
-    <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between gap-6 shrink-0 shadow-xs z-10">
+    <header className="h-16 bg-white border-b border-slate-200 px-6 flex items-center justify-between gap-6 shrink-0 shadow-xs z-10 print:hidden">
       {/* Zone 1: Breadcrumb & Context */}
       <div className="flex items-center gap-2.5 min-w-0">
         <img
@@ -99,15 +103,15 @@ export const Header: React.FC<HeaderProps> = ({
           )}
         </div>
 
-        {/* Export CSV Direct Link */}
-        <a
-          href="/api/export-csv"
-          download
+        {/* Export CSV Authenticated Action */}
+        <button
+          type="button"
+          onClick={onExportCsv}
           className="hidden sm:inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-2xs whitespace-nowrap"
         >
           <Download className="w-3.5 h-3.5 text-slate-500" />
           <span>Export Excel</span>
-        </a>
+        </button>
 
         {/* Primary Action Button */}
         {activeView !== 'new_order' && (
@@ -117,6 +121,18 @@ export const Header: React.FC<HeaderProps> = ({
           >
             <FilePlus2 className="w-4 h-4" />
             <span>Nouvel Ordre</span>
+          </button>
+        )}
+
+        {onSignOut && (
+          <button
+            type="button"
+            onClick={onSignOut}
+            title="Se déconnecter"
+            aria-label="Se déconnecter"
+            className="p-2 text-slate-500 hover:text-rose-700 hover:bg-rose-50 border border-slate-200 rounded-lg transition-colors"
+          >
+            <LogOut className="w-4 h-4" />
           </button>
         )}
       </div>

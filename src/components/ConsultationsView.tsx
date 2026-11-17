@@ -16,6 +16,8 @@ import {
   X,
   FileCheck2,
   ClipboardList,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
 import {
   PaymentOrder,
@@ -34,6 +36,9 @@ import {
   computeDefaultValueDate,
   generateNextConfirmationRef,
 } from '../utils/purchaseConfirmationPdf';
+import { canUserManageConsultation, isAdministrator } from '../utils/adminRules';
+import { AdminEditConsultationModal } from './AdminEditConsultationModal';
+import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
 
 interface ConsultationsViewProps {
   orders: PaymentOrder[];
@@ -67,6 +72,11 @@ interface ConsultationsViewProps {
     }
   ) => Promise<void>;
   onCancelConsultation: (consultationId: string, reason: string) => Promise<void>;
+  onUpdateConsultation?: (
+    consultationId: string,
+    payload: Partial<CurrencyConsultation>
+  ) => Promise<void>;
+  onDeleteConsultation?: (consultationId: string) => Promise<void>;
   onOpenPdfModal: (consultation: CurrencyConsultation) => void;
   onOpenConfirmationModal: (consultation: CurrencyConsultation, initialTab?: 'recap' | number) => void;
   onSelectOrder: (orderId: string) => void;
@@ -77,14 +87,23 @@ export const ConsultationsView: React.FC<ConsultationsViewProps> = ({
   orders,
   consultations,
   banks,
+  currentUser,
   onCreateConsultation,
   onRecordQuotes,
   onCancelConsultation,
+  onUpdateConsultation,
+  onDeleteConsultation,
   onOpenPdfModal,
   onOpenConfirmationModal,
   onSelectOrder,
   onSelectConsultation,
 }) => {
+  const [editingConsultation, setEditingConsultation] =
+    useState<CurrencyConsultation | null>(null);
+  const [deletingConsultation, setDeletingConsultation] =
+    useState<CurrencyConsultation | null>(null);
+
+  const isAdmin = isAdministrator(currentUser);
   // Ordres éligibles : déposés à la banque avec achat de devise exigé (EN_ATTENTE_ACHAT_DEVISE)
   const eligibleOrdersAll = useMemo(
     () => orders.filter(o => o.status === 'EN_ATTENTE_ACHAT_DEVISE'),
@@ -859,6 +878,38 @@ export const ConsultationsView: React.FC<ConsultationsViewProps> = ({
                         </button>
                       </>
                     )}
+
+                    {canUserManageConsultation(currentUser, c).allowed && onUpdateConsultation && (
+                      <button
+                        type="button"
+                        onClick={() => setEditingConsultation(c)}
+                        className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 border border-amber-200 rounded-lg transition-colors"
+                        title={
+                          isAdmin
+                            ? 'Modifier la consultation (Administrateur)'
+                            : 'Modifier ma consultation'
+                        }
+                        aria-label={`Modifier la consultation ${c.consultationNumber}`}
+                      >
+                        <Pencil className="w-4 h-4" />
+                      </button>
+                    )}
+
+                    {canUserManageConsultation(currentUser, c).allowed && onDeleteConsultation && (
+                      <button
+                        type="button"
+                        onClick={() => setDeletingConsultation(c)}
+                        className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors"
+                        title={
+                          isAdmin
+                            ? 'Supprimer la consultation (Administrateur)'
+                            : 'Supprimer ma consultation'
+                        }
+                        aria-label={`Supprimer la consultation ${c.consultationNumber}`}
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -976,6 +1027,31 @@ export const ConsultationsView: React.FC<ConsultationsViewProps> = ({
             </div>
           </form>
         </div>
+      )}
+
+      {editingConsultation && onUpdateConsultation && (
+        <AdminEditConsultationModal
+          consultation={editingConsultation}
+          banks={banks}
+          isAdmin={isAdmin}
+          onSave={onUpdateConsultation}
+          onClose={() => setEditingConsultation(null)}
+        />
+      )}
+
+      {deletingConsultation && onDeleteConsultation && (
+        <AdminConfirmDeleteModal
+          title="Supprimer définitivement cette consultation"
+          entityRef={deletingConsultation.consultationNumber}
+          description={`Vous êtes sur le point de supprimer la consultation ${deletingConsultation.consultationNumber} (${formatConsultationAmount(deletingConsultation.totalAmount, deletingConsultation.currency)}).`}
+          warningNote={
+            deletingConsultation.orderIds.length > 0
+              ? `${deletingConsultation.orderIds.length} ordre(s) rattaché(s) auront leur passerelle change réinitialisée (« NON_DEMARRE ») afin de pouvoir être rattachés à une nouvelle consultation.`
+              : undefined
+          }
+          onConfirm={() => onDeleteConsultation(deletingConsultation.id)}
+          onClose={() => setDeletingConsultation(null)}
+        />
       )}
     </div>
   );

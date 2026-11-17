@@ -16,6 +16,8 @@ import {
   Info,
   FileSpreadsheet,
   Lock,
+  Plus,
+  MinusCircle,
 } from 'lucide-react';
 import {
   Supplier,
@@ -25,12 +27,20 @@ import {
   DocumentType,
   PaymentDocument,
   Invoice,
+  InvoiceDocumentBasis,
+  OrderDeduction,
+  OrderDeductionCategory,
 } from '../types/payment';
 import { numberToFrenchWords } from '../utils/numberToFrenchWords';
-import { generateStructuredOrderNumber } from '../utils/workflowRules';
+import { computeNextStructuredOrderNumber, StructuredOrderNumberParts } from '../utils/workflowRules';
+import { api } from '../services/api';
 import {
+  DEDUCTION_CATEGORY_META,
   computeInvoicePaymentSummary,
   getAvailableInvoicesForOrder,
+  getInvoiceDefinitiveRef,
+  getInvoiceProformaRef,
+  getSuggestedNextTranche,
   validateOrderAgainstInvoice,
 } from '../utils/invoiceUtils';
 
@@ -42,7 +52,12 @@ interface NewOrderViewProps {
   initialInvoiceId?: string | null;
   currentUser: User;
   existingCount: number;
-  onSubmit: (orderData: Partial<PaymentOrder>) => Promise<void>;
+  onSubmit: (
+    orderData: Partial<PaymentOrder> & {
+      definitiveInvoiceNumber?: string;
+      definitiveInvoiceDate?: string;
+    }
+  ) => Promise<void>;
   onCancel: () => void;
 }
 
@@ -58,16 +73,37 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
   onCancel,
 }) => {
   const currentYear = new Date().getFullYear();
-  const initialStructured = generateStructuredOrderNumber(
-    currentUser.userCode || '001',
-    currentYear,
-    existingCount
+  const localAutoStructured = useMemo(
+    () =>
+      computeNextStructuredOrderNumber(
+        currentUser.userCode || '001',
+        currentYear,
+        orders
+      ),
+    [currentUser.userCode, currentYear, orders]
   );
 
-  // Form State - Numéro d'ordre structuré 000 UTILISATEUR 000 ANNEE 0000 ORDRE
-  const [userPart, setUserPart] = useState<string>(initialStructured.userPart);
-  const [yearPart, setYearPart] = useState<string>(initialStructured.yearPart);
-  const [seqPart, setSeqPart] = useState<string>(initialStructured.seqPart);
+  // Numéro d'ordre structuré 000 UTILISATEUR 000 ANNÉE 0000 ORDRE (généré automatiquement)
+  const [serverAutoStructured, setServerAutoStructured] =
+    useState<StructuredOrderNumberParts | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    api
+      .getNextOrderNumber(currentYear)
+      .then(res => {
+        if (active) setServerAutoStructured(res);
+      })
+      .catch(() => {
+        if (active) setServerAutoStructured(null);
+      });
+    return () => {
+      active = false;
+    };
+  }, [currentUser.id, currentUser.userCode, currentYear, orders.length]);
+
+  const autoStructured = serverAutoStructured ?? localAutoStructured;
+  const { userPart, yearPart, seqPart, orderNumber: autoOrderNumber } = autoStructured;
 
   // Contrat & Objet
   const [contractNumber, setContractNumber] = useState<string>('');
@@ -110,9 +146,32 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
   const [errorMsg, setErrorMsg] = useState<string | null>(null);
 
-  // Module 00 Facture sélectionnée (un ou plusieurs ordres par facture)
+  // Module 00 Facture sélectionnée (un ou plusieurs ordres par facture + déductions/frais)
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string>('');
+  const [documentBasis, setDocumentBasis] = useState<InvoiceDocumentBasis>('FACTURE_DEFINITIVE');
+  const [inlineDefinitiveNumber, setInlineDefinitiveNumber] = useState<string>('');
+  const [inlineDefinitiveDate, setInlineDefinitiveDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
   const [paymentMode, setPaymentMode] = useState<'FULL' | 'PARTIAL'>('FULL');
+  const [grossAmountInput, setGrossAmountInput] = useState<string>('');
+  const [deductions, setDeductions] = useState<
+    Array<{
+      id: string;
+      category: OrderDeductionCategory;
+      label: string;
+      amount: string;
+      reference: string;
+    }>
+  >([]);
+
+  const deductionsTotal = useMemo(() => {
+    const sum = deductions.reduce((acc, d) => {
+      const val = parseFloat(d.amount);
+      return acc + (Number.isFinite(val) && val > 0 ? val : 0);
+    }, 0);
+    return Number(sum.toFixed(2));
+  }, [deductions]);
 
   const availableInvoices = useMemo(
     () => getAvailableInvoicesForOrder(invoices, orders),
@@ -129,24 +188,158 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
     [selectedInvoice, orders]
   );
 
+  const syncNetFromGross = (nextGrossValue: number, nextDeductionsTotal: number) => {
+    if (!Number.isFinite(nextGrossValue) || nextGrossValue <= 0) {
+      setAmount('');
+      return;
+    }
+    const net = Number((nextGrossValue - nextDeductionsTotal).toFixed(2));
+    setAmount(net > 0 ? String(net) : '0');
+  };
+
+  const handleAddDeduction = (category: OrderDeductionCategory = 'FRAIS_ENREGISTREMENT') => {
+    const meta = DEDUCTION_CATEGORY_META[category];
+    setDeductions(prev => [
+      ...prev,
+      {
+        id: 'ded_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
+        category,
+        label: meta.label,
+        amount: '',
+        reference: '',
+      },
+    ]);
+  };
+
+  const handleUpdateDeduction = (
+    id: string,
+    patch: Partial<{
+      category: OrderDeductionCategory;
+      label: string;
+      amount: string;
+      reference: string;
+    }>
+  ) => {
+    const nextList = deductions.map(d => {
+      if (d.id !== id) return d;
+      const updated = { ...d, ...patch };
+      if (patch.category) {
+        const prevDefault = DEDUCTION_CATEGORY_META[d.category].label;
+        if (!d.label.trim() || d.label === prevDefault) {
+          updated.label = DEDUCTION_CATEGORY_META[patch.category].label;
+        }
+      }
+      return updated;
+    });
+    setDeductions(nextList);
+
+    if (selectedInvoiceSummary) {
+      const nextTotal = Number(
+        nextList
+          .reduce((acc, item) => {
+            const v = parseFloat(item.amount);
+            return acc + (Number.isFinite(v) && v > 0 ? v : 0);
+          }, 0)
+          .toFixed(2)
+      );
+      const baseGross =
+        paymentMode === 'FULL'
+          ? selectedInvoiceSummary.remainingAmount
+          : parseFloat(grossAmountInput) || 0;
+      syncNetFromGross(baseGross, nextTotal);
+    }
+  };
+
+  const handleRemoveDeduction = (id: string) => {
+    const nextList = deductions.filter(d => d.id !== id);
+    setDeductions(nextList);
+
+    if (selectedInvoiceSummary) {
+      const nextTotal = Number(
+        nextList
+          .reduce((acc, item) => {
+            const v = parseFloat(item.amount);
+            return acc + (Number.isFinite(v) && v > 0 ? v : 0);
+          }, 0)
+          .toFixed(2)
+      );
+      const baseGross =
+        paymentMode === 'FULL'
+          ? selectedInvoiceSummary.remainingAmount
+          : parseFloat(grossAmountInput) || 0;
+      syncNetFromGross(baseGross, nextTotal);
+    }
+  };
+
+  const handleDocumentBasisChange = (
+    nextBasis: InvoiceDocumentBasis,
+    invOverride?: Invoice | null
+  ) => {
+    const inv = invOverride ?? selectedInvoice;
+    setDocumentBasis(nextBasis);
+    if (!inv) return;
+
+    const profRef = getInvoiceProformaRef(inv);
+    const defRef = getInvoiceDefinitiveRef(inv);
+    const today = new Date().toISOString().split('T')[0];
+
+    if (nextBasis === 'PROFORMA') {
+      setInvoiceNumber(profRef?.number || inv.invoiceNumber);
+      setInvoiceDate(profRef?.date || inv.invoiceDate);
+    } else if (defRef) {
+      setInvoiceNumber(defRef.number);
+      setInvoiceDate(defRef.date || inv.invoiceDate);
+    } else {
+      setInvoiceNumber(inlineDefinitiveNumber);
+      setInvoiceDate(inlineDefinitiveDate || today);
+    }
+  };
+
   const applyInvoiceSelection = (invoiceId: string) => {
     setErrorMsg(null);
+    setDeductions([]);
+    const today = new Date().toISOString().split('T')[0];
     if (!invoiceId) {
       setSelectedInvoiceId('');
+      setDocumentBasis('FACTURE_DEFINITIVE');
+      setInlineDefinitiveNumber('');
+      setInlineDefinitiveDate(today);
+      setGrossAmountInput('');
       return;
     }
     const found = invoices.find(inv => inv.id === invoiceId);
     if (!found) return;
     const summary = computeInvoicePaymentSummary(found, orders);
+    const suggestion = getSuggestedNextTranche(found, summary);
+    const profRef = getInvoiceProformaRef(found);
+    const defRef = getInvoiceDefinitiveRef(found);
 
     setSelectedInvoiceId(found.id);
     if (found.contractNumber) setContractNumber(found.contractNumber);
     setPurpose(found.purpose || '');
-    setTransferPurpose(
-      `Règlement facture ${found.invoiceNumber}${
-        summary.linkedOrders.length > 0 ? ` (Tranche ${summary.linkedOrders.length + 1})` : ''
-      }`
-    );
+    setTransferType(suggestion.transferType);
+    setDocumentBasis(suggestion.documentBasis);
+    setInlineDefinitiveNumber('');
+    setInlineDefinitiveDate(today);
+
+    if (suggestion.isMixedScheme && summary.linkedOrders.length === 0) {
+      setTransferPurpose(
+        `Ouverture LC 50 % sur Proforma ${profRef?.number || found.invoiceNumber}`
+      );
+    } else if (suggestion.isMixedScheme) {
+      setTransferPurpose(
+        `Solde 50 % Virement sur Facture Définitive${
+          defRef ? ` ${defRef.number}` : ''
+        }`
+      );
+    } else {
+      setTransferPurpose(
+        `Règlement facture ${found.invoiceNumber}${
+          summary.linkedOrders.length > 0 ? ` (Tranche ${summary.linkedOrders.length + 1})` : ''
+        }`
+      );
+    }
+
     setSelectedSupplierId(found.supplierId || '');
     setBeneficiaryName(found.supplierName || '');
     setBeneficiaryCountry(found.supplierCountry || '');
@@ -156,10 +349,23 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
     setBeneficiarySwift(found.supplierSwift || '');
     setCurrency(found.currency);
     setOperationNature(found.operationNature || 'Importation tabac brut');
-    setInvoiceNumber(found.invoiceNumber);
-    setInvoiceDate(found.invoiceDate);
-    setPaymentMode('FULL');
-    setAmount(summary.remainingAmount > 0 ? String(summary.remainingAmount) : '');
+
+    if (suggestion.documentBasis === 'PROFORMA') {
+      setInvoiceNumber(profRef?.number || found.invoiceNumber);
+      setInvoiceDate(profRef?.date || found.invoiceDate);
+    } else if (defRef) {
+      setInvoiceNumber(defRef.number);
+      setInvoiceDate(defRef.date || found.invoiceDate);
+    } else {
+      setInvoiceNumber('');
+      setInvoiceDate(today);
+    }
+
+    setPaymentMode(suggestion.paymentMode);
+    const suggestedStr =
+      suggestion.suggestedGrossAmount > 0 ? String(suggestion.suggestedGrossAmount) : '';
+    setGrossAmountInput(suggestedStr);
+    setAmount(suggestedStr);
 
     if (found.documents && found.documents.length > 0) {
       setDocuments(prev => {
@@ -263,11 +469,31 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
     }
     const parsedAmount = parseFloat(amount);
     if (isNaN(parsedAmount) || parsedAmount <= 0) {
-      setErrorMsg('Veuillez saisir un montant valide supérieur à 0.');
+      setErrorMsg(
+        deductionsTotal > 0
+          ? 'Le montant net à transférer après déductions doit être strictement supérieur à 0.'
+          : 'Veuillez saisir un montant valide supérieur à 0.'
+      );
       return;
     }
-    if (!invoiceNumber.trim()) {
-      setErrorMsg('La référence de la facture est obligatoire.');
+    const selectedProfRef = selectedInvoice ? getInvoiceProformaRef(selectedInvoice) : null;
+    const selectedDefRef = selectedInvoice ? getInvoiceDefinitiveRef(selectedInvoice) : null;
+    const effectiveInvoiceNumber = (
+      selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+        ? inlineDefinitiveNumber || invoiceNumber
+        : invoiceNumber
+    ).trim();
+    const effectiveInvoiceDate =
+      selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+        ? inlineDefinitiveDate || invoiceDate
+        : invoiceDate;
+
+    if (!effectiveInvoiceNumber) {
+      setErrorMsg(
+        selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+          ? 'Veuillez saisir le N° de la Facture Définitive reçue pour cet ordre.'
+          : 'La référence de la facture est obligatoire.'
+      );
       return;
     }
     if (transferType !== 'VIREMENT' && !lcNumber.trim()) {
@@ -275,12 +501,40 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
       return;
     }
 
+    const hasInvalidDeduction = deductions.some(d => {
+      if (!d.amount.trim()) return false;
+      const val = parseFloat(d.amount);
+      return !Number.isFinite(val) || val < 0;
+    });
+    if (hasInvalidDeduction) {
+      setErrorMsg('Veuillez saisir un montant valide (positif) pour chaque ligne de déduction.');
+      return;
+    }
+
+    const deductionPayload: OrderDeduction[] = deductions
+      .map(d => ({
+        id: d.id,
+        category: d.category,
+        label: d.label.trim() || DEDUCTION_CATEGORY_META[d.category].label,
+        amount: Number((parseFloat(d.amount) || 0).toFixed(2)),
+        reference: d.reference.trim() || undefined,
+      }))
+      .filter(d => d.amount > 0);
+
+    const computedGross = selectedInvoice
+      ? paymentMode === 'FULL' && selectedInvoiceSummary
+        ? selectedInvoiceSummary.remainingAmount
+        : Number((parseFloat(grossAmountInput) || parsedAmount + deductionsTotal).toFixed(2))
+      : parsedAmount;
+
     if (selectedInvoice) {
       const invoiceCheck = validateOrderAgainstInvoice(
         selectedInvoice,
         orders,
         parsedAmount,
-        currency
+        currency,
+        deductionPayload,
+        computedGross
       );
       if (!invoiceCheck.valid) {
         setErrorMsg(invoiceCheck.error || 'Montant incompatible avec le solde de la facture.');
@@ -290,12 +544,8 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
 
     try {
       setIsSubmitting(true);
-      const structuredFullNumber = `${userPart}-${yearPart}-${seqPart}`;
       await onSubmit({
-        orderNumber: structuredFullNumber,
-        userCode: userPart,
-        yearCode: yearPart,
-        orderSeq: seqPart,
+        fiscalYear: currentYear,
         contractNumber: contractNumber.trim(),
         transferType,
         lcNumber: transferType !== 'VIREMENT' ? lcNumber.trim() : undefined,
@@ -309,12 +559,24 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
         beneficiaryIban,
         beneficiarySwift,
         currency,
+        grossAmount: selectedInvoice ? computedGross : parsedAmount,
+        deductionsTotal: selectedInvoice ? deductionsTotal : 0,
+        deductions: selectedInvoice ? deductionPayload : [],
         amount: parsedAmount,
         amountInWords: amountInWords || numberToFrenchWords(parsedAmount, currency),
         transferPurpose: transferPurpose || purpose,
         invoiceId: selectedInvoiceId || undefined,
-        invoiceNumber,
-        invoiceDate,
+        documentBasis: selectedInvoice ? documentBasis : 'FACTURE_DEFINITIVE',
+        invoiceNumber: effectiveInvoiceNumber,
+        invoiceDate: effectiveInvoiceDate,
+        proformaNumber: selectedProfRef?.number,
+        proformaDate: selectedProfRef?.date,
+        ...(selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+          ? {
+              definitiveInvoiceNumber: effectiveInvoiceNumber,
+              definitiveInvoiceDate: effectiveInvoiceDate,
+            }
+          : {}),
         operationNature,
         bankId,
         bankName,
@@ -341,8 +603,12 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
               Formulaire de Saisie Officiel · DFC
             </span>
             <span className="text-slate-300">·</span>
-            <span className="text-xs font-mono bg-blue-50 text-blue-800 px-2 py-0.5 rounded border border-blue-200 font-bold">
-              {`${userPart}-${yearPart}-${seqPart}`}
+            <span
+              data-testid="auto-order-number-banner"
+              className="text-xs font-mono bg-blue-50 text-blue-800 px-2 py-0.5 rounded border border-blue-200 font-bold inline-flex items-center gap-1"
+            >
+              <Lock className="w-3 h-3 text-blue-600" />
+              {autoOrderNumber}
             </span>
           </div>
           <h2 className="text-lg font-bold text-slate-900 mt-1">
@@ -391,36 +657,70 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
             className="w-full bg-slate-50 border border-slate-300 rounded-lg px-3 py-2.5 text-xs font-medium text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-blue-600"
           >
             <option value="">-- Saisie manuelle sans rattachement facture --</option>
-            {availableInvoices.map(({ invoice, summary }) => (
-              <option key={invoice.id} value={invoice.id}>
-                {invoice.invoiceNumber} — {invoice.supplierName} — Reste :{' '}
-                {summary.remainingAmount.toLocaleString('fr-FR', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}{' '}
-                / {invoice.totalAmount.toLocaleString('fr-FR', {
-                  minimumFractionDigits: 2,
-                  maximumFractionDigits: 2,
-                })}{' '}
-                {invoice.currency}
-                {summary.linkedOrders.length > 0
-                  ? ` (${summary.linkedOrders.length} ordre(s) déjà émis)`
-                  : ''}
-              </option>
-            ))}
+            {availableInvoices.map(({ invoice, summary }) => {
+              const pRef = getInvoiceProformaRef(invoice);
+              const dRef = getInvoiceDefinitiveRef(invoice);
+              const refLabel =
+                pRef && dRef
+                  ? `${dRef.number} (Proforma ${pRef.number})`
+                  : pRef && !dRef
+                  ? `Proforma ${pRef.number}`
+                  : invoice.invoiceNumber;
+              return (
+                <option key={invoice.id} value={invoice.id}>
+                  {refLabel} — {invoice.supplierName}
+                  {invoice.paymentScheme === '50_LC_50_VIREMENT' ? ' [50% LC / 50% Vir.]' : ''} — Reste :{' '}
+                  {summary.remainingAmount.toLocaleString('fr-FR', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  / {invoice.totalAmount.toLocaleString('fr-FR', {
+                    minimumFractionDigits: 2,
+                    maximumFractionDigits: 2,
+                  })}{' '}
+                  {invoice.currency}
+                  {summary.linkedOrders.length > 0
+                    ? ` (${summary.linkedOrders.length} ordre(s) déjà émis)`
+                    : ''}
+                </option>
+              );
+            })}
           </select>
         </div>
 
         {selectedInvoice && selectedInvoiceSummary && (() => {
-          const parsedAmt = parseFloat(amount) || 0;
+          const parsedNet = parseFloat(amount) || 0;
+          const parsedGross =
+            paymentMode === 'FULL'
+              ? selectedInvoiceSummary.remainingAmount
+              : parseFloat(grossAmountInput) || 0;
           const remainingAfter = Math.max(
             0,
-            Number((selectedInvoiceSummary.remainingAmount - parsedAmt).toFixed(2))
+            Number((selectedInvoiceSummary.remainingAmount - parsedGross).toFixed(2))
           );
-          const exceedsBalance = parsedAmt > selectedInvoiceSummary.remainingAmount + 0.005;
+          const exceedsBalance = parsedGross > selectedInvoiceSummary.remainingAmount + 0.005;
+          const netInvalidAfterDeductions = deductionsTotal > 0 && parsedNet <= 0;
+          const profRef = getInvoiceProformaRef(selectedInvoice);
+          const defRef = getInvoiceDefinitiveRef(selectedInvoice);
+          const halfAmount = Number((selectedInvoice.totalAmount / 2).toFixed(2));
+          const suggestion = getSuggestedNextTranche(selectedInvoice, selectedInvoiceSummary);
 
           return (
-            <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-3">
+            <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-4">
+              {selectedInvoice.paymentScheme === '50_LC_50_VIREMENT' && (
+                <div className="p-3 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-950 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="font-bold">Dossier Mixte 50 % LC + 50 % Virement · </span>
+                    <span>{suggestion.label}</span>
+                  </div>
+                  <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-indigo-200">
+                    {profRef ? `Proforma : ${profRef.number}` : ''}
+                    {profRef && defRef ? ' · ' : ''}
+                    {defRef ? `Facture Déf. : ${defRef.number}` : ''}
+                  </span>
+                </div>
+              )}
+
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
                 <div className="bg-white rounded-lg p-2.5 border border-blue-100">
                   <div className="text-[11px] text-slate-500">Montant Total Facture</div>
@@ -469,6 +769,96 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                 </div>
               </div>
 
+              {/* Document justificatif de cet ordre (Proforma vs Facture Définitive) */}
+              {(profRef || selectedInvoice.paymentScheme === '50_LC_50_VIREMENT') && (
+                <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <span className="text-xs font-bold text-slate-800">
+                      Document justificatif de cet ordre
+                    </span>
+                    <div className="flex flex-wrap items-center gap-2">
+                      {profRef && (
+                        <button
+                          type="button"
+                          onClick={() => handleDocumentBasisChange('PROFORMA')}
+                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                            documentBasis === 'PROFORMA'
+                              ? 'bg-indigo-700 text-white border-indigo-700'
+                              : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                          }`}
+                        >
+                          Proforma ({profRef.number})
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => handleDocumentBasisChange('FACTURE_DEFINITIVE')}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                          documentBasis === 'FACTURE_DEFINITIVE'
+                            ? 'bg-blue-700 text-white border-blue-700'
+                            : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                        }`}
+                      >
+                        {defRef
+                          ? `Facture Définitive (${defRef.number})`
+                          : 'Facture Définitive (à saisir)'}
+                      </button>
+                    </div>
+                  </div>
+
+                  {documentBasis === 'FACTURE_DEFINITIVE' && !defRef && (
+                    <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 space-y-2.5">
+                      <div className="text-xs font-bold text-amber-950">
+                        Renseigner la Facture Définitive reçue pour ce Virement (sans modifier le montant total du dossier)
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-[11px] font-semibold text-amber-950 mb-1">
+                            N° Facture Définitive <span className="text-rose-500">*</span>
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="Ex : FAC-DEF-2026-088"
+                            value={inlineDefinitiveNumber}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setInlineDefinitiveNumber(val);
+                              setInvoiceNumber(val);
+                            }}
+                            className="w-full bg-white border border-amber-300 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-semibold text-amber-950 mb-1">
+                            Date Facture Définitive
+                          </label>
+                          <input
+                            type="date"
+                            value={inlineDefinitiveDate}
+                            onChange={e => {
+                              const val = e.target.value;
+                              setInlineDefinitiveDate(val);
+                              setInvoiceDate(val);
+                            }}
+                            className="w-full bg-white border border-amber-300 rounded-lg px-3 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600"
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {documentBasis === 'FACTURE_DEFINITIVE' && profRef && (
+                    <div className="text-[11px] text-slate-600">
+                      Rappel automatique sur l&apos;imprimé Demi-A4 :{' '}
+                      <strong className="font-mono text-slate-800">
+                        sur Proforma {profRef.number}
+                        {profRef.date ? ` (${profRef.date})` : ''}
+                      </strong>
+                    </div>
+                  )}
+                </div>
+              )}
+
               {selectedInvoiceSummary.linkedOrders.length > 0 && (
                 <div className="flex flex-wrap items-center gap-1.5 text-[11px] text-slate-600">
                   <span className="font-semibold">Ordres précédents :</span>
@@ -477,7 +867,14 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                       key={o.id}
                       className="px-2 py-0.5 rounded bg-white border border-blue-200 font-mono text-blue-800"
                     >
-                      {o.orderNumber} ({o.amount.toLocaleString('fr-FR')} {o.currency})
+                      {o.orderNumber} ({o.amount.toLocaleString('fr-FR')} {o.currency}
+                      {o.documentBasis === 'PROFORMA'
+                        ? ` · Proforma ${o.invoiceNumber}`
+                        : ` · Facture ${o.invoiceNumber}`}
+                      {(o.deductionsTotal || 0) > 0
+                        ? ` · Déd. -${(o.deductionsTotal || 0).toLocaleString('fr-FR')}`
+                        : ''}
+                      )
                     </span>
                   ))}
                 </div>
@@ -488,7 +885,9 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                   type="button"
                   onClick={() => {
                     setPaymentMode('FULL');
-                    setAmount(String(selectedInvoiceSummary.remainingAmount));
+                    const rem = selectedInvoiceSummary.remainingAmount;
+                    setGrossAmountInput(String(rem));
+                    syncNetFromGross(rem, deductionsTotal);
                   }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
                     paymentMode === 'FULL'
@@ -498,10 +897,32 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                 >
                   Règlement total du solde ({selectedInvoiceSummary.remainingAmount.toLocaleString('fr-FR')} {selectedInvoice.currency})
                 </button>
+                {selectedInvoice.paymentScheme === '50_LC_50_VIREMENT' &&
+                  halfAmount < selectedInvoiceSummary.remainingAmount - 0.005 && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setPaymentMode('PARTIAL');
+                        setGrossAmountInput(String(halfAmount));
+                        syncNetFromGross(halfAmount, deductionsTotal);
+                      }}
+                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                        paymentMode === 'PARTIAL' &&
+                        Math.abs((parseFloat(grossAmountInput) || 0) - halfAmount) <= 0.01
+                          ? 'bg-indigo-700 text-white border-indigo-700'
+                          : 'bg-white text-indigo-800 border-indigo-300 hover:bg-indigo-50'
+                      }`}
+                    >
+                      50 % Tranche ({halfAmount.toLocaleString('fr-FR')} {selectedInvoice.currency})
+                    </button>
+                  )}
                 <button
                   type="button"
                   onClick={() => {
                     setPaymentMode('PARTIAL');
+                    if (!grossAmountInput) {
+                      setGrossAmountInput(String(selectedInvoiceSummary.remainingAmount));
+                    }
                   }}
                   className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
                     paymentMode === 'PARTIAL'
@@ -513,11 +934,228 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                 </button>
               </div>
 
+              {paymentMode === 'PARTIAL' && (
+                <div className="bg-white rounded-lg border border-amber-200 p-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <label
+                      htmlFor="grossAmountInput"
+                      className="block text-xs font-bold text-slate-800"
+                    >
+                      Montant brut imputé sur la facture ({selectedInvoice.currency})
+                    </label>
+                    <p className="text-[11px] text-slate-500">
+                      Montant de la tranche facturée avant déduction des frais ou retenues ci-dessous.
+                    </p>
+                  </div>
+                  <input
+                    id="grossAmountInput"
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    placeholder="0.00"
+                    value={grossAmountInput}
+                    onChange={e => {
+                      const val = e.target.value;
+                      setGrossAmountInput(val);
+                      const num = parseFloat(val);
+                      if (!isNaN(num) && Math.abs(num - selectedInvoiceSummary.remainingAmount) <= 0.005) {
+                        setPaymentMode('FULL');
+                      }
+                      syncNetFromGross(num, deductionsTotal);
+                    }}
+                    className="w-full sm:w-52 bg-slate-50 border border-amber-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-2 focus:ring-amber-500 text-right"
+                  />
+                </div>
+              )}
+
+              {/* Déductions, Frais d'enregistrement & Retenues sur facture */}
+              <div className="bg-white rounded-xl border border-slate-200 p-4 space-y-3">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 pb-2 border-b border-slate-100">
+                  <div className="flex items-center gap-2">
+                    <MinusCircle className="w-4 h-4 text-amber-600 shrink-0" />
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-900">
+                        Déductions, Frais d’Enregistrement & Retenues sur Facture
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Les montants déduits sont retranchés du montant brut facture pour obtenir le net à transférer.
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => handleAddDeduction('FRAIS_ENREGISTREMENT')}
+                    className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-slate-900 text-white hover:bg-slate-800 transition-colors whitespace-nowrap self-start sm:self-auto"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>Ajouter une déduction / frais</span>
+                  </button>
+                </div>
+
+                {/* Quick preset shortcuts */}
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-slate-500 mr-1">Ajout rapide :</span>
+                  {(
+                    [
+                      'FRAIS_ENREGISTREMENT',
+                      'RETENUE_SOURCE',
+                      'PENALITE_RETARD',
+                      'AVOIR_REMISE',
+                      'FRAIS_BANCAIRES',
+                      'DROITS_TIMBRE',
+                    ] as OrderDeductionCategory[]
+                  ).map(cat => (
+                    <button
+                      key={cat}
+                      type="button"
+                      onClick={() => handleAddDeduction(cat)}
+                      className="px-2 py-1 rounded-md text-[11px] font-medium bg-slate-50 hover:bg-blue-50 text-slate-700 hover:text-blue-800 border border-slate-200 hover:border-blue-300 transition-colors"
+                    >
+                      + {DEDUCTION_CATEGORY_META[cat].shortLabel}
+                    </button>
+                  ))}
+                </div>
+
+                {deductions.length > 0 && (
+                  <div className="space-y-2 pt-1">
+                    {deductions.map((ded, idx) => {
+                      const catMeta = DEDUCTION_CATEGORY_META[ded.category];
+                      return (
+                        <div
+                          key={ded.id}
+                          className="grid grid-cols-1 md:grid-cols-12 gap-2 p-2.5 rounded-lg bg-slate-50 border border-slate-200 items-end"
+                        >
+                          <div className="md:col-span-3">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                              Nature / Catégorie
+                            </label>
+                            <select
+                              aria-label={`Catégorie déduction ${idx + 1}`}
+                              value={ded.category}
+                              onChange={e =>
+                                handleUpdateDeduction(ded.id, {
+                                  category: e.target.value as OrderDeductionCategory,
+                                })
+                              }
+                              className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                            >
+                              {(
+                                Object.keys(DEDUCTION_CATEGORY_META) as OrderDeductionCategory[]
+                              ).map(catKey => (
+                                <option key={catKey} value={catKey}>
+                                  {DEDUCTION_CATEGORY_META[catKey].label}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+
+                          <div className="md:col-span-4">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                              Libellé / Motif de la déduction
+                            </label>
+                            <input
+                              type="text"
+                              aria-label={`Libellé déduction ${idx + 1}`}
+                              placeholder={catMeta.label}
+                              value={ded.label}
+                              onChange={e =>
+                                handleUpdateDeduction(ded.id, { label: e.target.value })
+                              }
+                              className="w-full bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                              Réf. pièce (optionnel)
+                            </label>
+                            <input
+                              type="text"
+                              aria-label={`Référence déduction ${idx + 1}`}
+                              placeholder={catMeta.placeholderRef}
+                              value={ded.reference}
+                              onChange={e =>
+                                handleUpdateDeduction(ded.id, { reference: e.target.value })
+                              }
+                              className="w-full bg-white border border-slate-200 rounded-md px-2 py-1.5 text-xs font-mono text-slate-800 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                            />
+                          </div>
+
+                          <div className="md:col-span-2">
+                            <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                              Montant ({selectedInvoice.currency})
+                            </label>
+                            <input
+                              type="number"
+                              step="0.01"
+                              min="0"
+                              aria-label={`Montant déduction ${idx + 1}`}
+                              placeholder="0.00"
+                              value={ded.amount}
+                              onChange={e =>
+                                handleUpdateDeduction(ded.id, { amount: e.target.value })
+                              }
+                              className="w-full bg-white border border-slate-200 rounded-md px-2.5 py-1.5 text-xs font-mono font-bold text-slate-900 text-right focus:outline-none focus:ring-1 focus:ring-blue-600"
+                            />
+                          </div>
+
+                          <div className="md:col-span-1 flex justify-end">
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveDeduction(ded.id)}
+                              aria-label={`Supprimer la déduction ${ded.label || idx + 1}`}
+                              className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-white rounded-md border border-transparent hover:border-rose-200 transition-colors"
+                              title="Supprimer cette déduction"
+                            >
+                              <Trash2 className="w-4 h-4" />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {/* Récapitulatif Brut - Déductions = Net à transférer */}
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 pt-2 border-t border-slate-100 text-xs">
+                  <div className="px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 flex items-center justify-between">
+                    <span className="text-slate-600">Brut imputé facture</span>
+                    <span className="font-mono font-bold text-slate-900">
+                      {parsedGross.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}{' '}
+                      {selectedInvoice.currency}
+                    </span>
+                  </div>
+                  <div className="px-3 py-2 rounded-lg bg-amber-50 border border-amber-200 flex items-center justify-between">
+                    <span className="text-amber-800">Total déductions / frais</span>
+                    <span className="font-mono font-bold text-amber-900">
+                      − {deductionsTotal.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}{' '}
+                      {selectedInvoice.currency}
+                    </span>
+                  </div>
+                  <div className="px-3 py-2 rounded-lg bg-blue-50 border border-blue-200 flex items-center justify-between">
+                    <span className="font-semibold text-blue-900">Net à transférer</span>
+                    <span className="font-mono font-extrabold text-blue-950">
+                      {parsedNet.toLocaleString('fr-FR', { minimumFractionDigits: 2 })}{' '}
+                      {selectedInvoice.currency}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
               {exceedsBalance && (
                 <div className="text-xs text-rose-700 font-semibold flex items-center gap-1.5">
                   <AlertCircle className="w-4 h-4 shrink-0" />
                   <span>
-                    Le montant saisi dépasse le solde restant de la facture ({selectedInvoiceSummary.remainingAmount.toLocaleString('fr-FR')} {selectedInvoice.currency}).
+                    Le montant brut imputé ({parsedGross.toLocaleString('fr-FR')} {selectedInvoice.currency}) dépasse le solde restant de la facture ({selectedInvoiceSummary.remainingAmount.toLocaleString('fr-FR')} {selectedInvoice.currency}).
+                  </span>
+                </div>
+              )}
+
+              {netInvalidAfterDeductions && (
+                <div className="text-xs text-rose-700 font-semibold flex items-center gap-1.5">
+                  <AlertCircle className="w-4 h-4 shrink-0" />
+                  <span>
+                    Le total des déductions ({deductionsTotal.toLocaleString('fr-FR')} {selectedInvoice.currency}) doit être strictement inférieur au montant brut imputé ({parsedGross.toLocaleString('fr-FR')} {selectedInvoice.currency}).
                   </span>
                 </div>
               )}
@@ -535,61 +1173,73 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
           </h3>
         </div>
 
-        {/* Structure Numéro d'ordre : 000 UTILISATEUR 000 ANNEE 0000 ORDRE */}
+        {/* Structure Numéro d'ordre : 000 UTILISATEUR 000 ANNEE 0000 ORDRE (génération automatique) */}
         <div>
-          <div className="flex items-center justify-between mb-1.5">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-1.5">
             <label className="text-xs font-semibold text-slate-700">
-              Numéro d'Ordre Structuré <span className="font-mono text-slate-400 font-normal">(000 UTILISATEUR · 000 ANNÉE · 0000 ORDRE)</span>
+              Numéro d'Ordre Structuré{' '}
+              <span className="font-mono text-slate-400 font-normal">
+                (000 UTILISATEUR · 000 ANNÉE · 0000 ORDRE)
+              </span>
             </label>
-            <span className="text-xs font-mono font-bold text-blue-700 bg-blue-50 px-2 py-0.5 rounded border border-blue-200">
-              {`${userPart}-${yearPart}-${seqPart}`}
-            </span>
+            <div className="flex items-center gap-2">
+              <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded border border-emerald-200">
+                <Lock className="w-3 h-3" />
+                Généré automatiquement
+              </span>
+              <span
+                data-testid="auto-order-number-preview"
+                className="text-xs font-mono font-bold text-blue-700 bg-blue-50 px-2.5 py-0.5 rounded border border-blue-200"
+              >
+                {autoOrderNumber}
+              </span>
+            </div>
           </div>
 
           <div className="grid grid-cols-3 gap-3 p-3 bg-slate-50 border border-slate-200 rounded-lg">
             <div>
-              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                000 Utilisateur
-              </label>
-              <input
-                type="text"
-                maxLength={3}
-                value={userPart}
-                onChange={e => setUserPart(e.target.value.replace(/\D/g, '').slice(0, 3))}
-                placeholder="001"
-                className="w-full bg-white border border-slate-300 rounded-md px-3 py-1.5 text-xs font-mono font-bold text-slate-800 text-center focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-              <span className="text-[10px] text-slate-500 mt-0.5 block text-center">Code Utilisateur</span>
+              <div className="text-[11px] font-semibold text-slate-600 mb-1 flex items-center justify-center gap-1">
+                <span>000 Utilisateur</span>
+              </div>
+              <div
+                aria-label="000 Utilisateur généré automatiquement"
+                className="w-full bg-slate-100 border border-slate-200 rounded-md px-3 py-1.5 text-xs font-mono font-bold text-slate-800 text-center select-all"
+              >
+                {userPart}
+              </div>
+              <span className="text-[10px] text-slate-500 mt-0.5 block text-center">
+                Code agent ({currentUser.name.split(' ')[0]})
+              </span>
             </div>
 
             <div>
-              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              <div className="text-[11px] font-semibold text-slate-600 mb-1 text-center">
                 000 Année
-              </label>
-              <input
-                type="text"
-                maxLength={3}
-                value={yearPart}
-                onChange={e => setYearPart(e.target.value.replace(/\D/g, '').slice(0, 3))}
-                placeholder="026"
-                className="w-full bg-white border border-slate-300 rounded-md px-3 py-1.5 text-xs font-mono font-bold text-slate-800 text-center focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-              <span className="text-[10px] text-slate-500 mt-0.5 block text-center">Année (ex: 026)</span>
+              </div>
+              <div
+                aria-label="000 Année générée automatiquement"
+                className="w-full bg-slate-100 border border-slate-200 rounded-md px-3 py-1.5 text-xs font-mono font-bold text-slate-800 text-center select-all"
+              >
+                {yearPart}
+              </div>
+              <span className="text-[10px] text-slate-500 mt-0.5 block text-center">
+                Exercice {currentYear}
+              </span>
             </div>
 
             <div>
-              <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+              <div className="text-[11px] font-semibold text-slate-600 mb-1 text-center">
                 0000 Ordre
-              </label>
-              <input
-                type="text"
-                maxLength={4}
-                value={seqPart}
-                onChange={e => setSeqPart(e.target.value.replace(/\D/g, '').slice(0, 4))}
-                placeholder="0001"
-                className="w-full bg-white border border-slate-300 rounded-md px-3 py-1.5 text-xs font-mono font-bold text-slate-800 text-center focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-              <span className="text-[10px] text-slate-500 mt-0.5 block text-center">Séquence Chrono</span>
+              </div>
+              <div
+                aria-label="0000 Ordre généré automatiquement"
+                className="w-full bg-slate-100 border border-slate-200 rounded-md px-3 py-1.5 text-xs font-mono font-bold text-slate-800 text-center select-all"
+              >
+                {seqPart}
+              </div>
+              <span className="text-[10px] text-slate-500 mt-0.5 block text-center">
+                Séquence chrono auto
+              </span>
             </div>
           </div>
         </div>
@@ -770,7 +1420,10 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Montant à Transférer <span className="text-rose-500">*</span>
+              {selectedInvoice && deductionsTotal > 0
+                ? 'Montant Net à Transférer (après déductions)'
+                : 'Montant à Transférer'}{' '}
+              <span className="text-rose-500">*</span>
             </label>
             <input
               type="number"
@@ -782,10 +1435,16 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                 setAmount(val);
                 if (selectedInvoiceSummary) {
                   const num = parseFloat(val);
-                  if (!isNaN(num) && Math.abs(num - selectedInvoiceSummary.remainingAmount) > 0.005) {
-                    setPaymentMode('PARTIAL');
-                  } else if (!isNaN(num) && Math.abs(num - selectedInvoiceSummary.remainingAmount) <= 0.005) {
-                    setPaymentMode('FULL');
+                  if (!isNaN(num)) {
+                    const nextGross = Number((num + deductionsTotal).toFixed(2));
+                    setGrossAmountInput(String(nextGross));
+                    if (Math.abs(nextGross - selectedInvoiceSummary.remainingAmount) > 0.005) {
+                      setPaymentMode('PARTIAL');
+                    } else {
+                      setPaymentMode('FULL');
+                    }
+                  } else {
+                    setGrossAmountInput('');
                   }
                 }
               }}
@@ -826,25 +1485,65 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Référence de la Facture <span className="text-rose-500">*</span>
+              {selectedInvoice && documentBasis === 'PROFORMA'
+                ? 'Référence de la Proforma'
+                : selectedInvoice
+                ? 'Référence de la Facture Définitive'
+                : 'Référence de la Facture'}{' '}
+              <span className="text-rose-500">*</span>
             </label>
             <input
               type="text"
               placeholder="Ex : FAC-2026-9901"
               value={invoiceNumber}
-              onChange={e => setInvoiceNumber(e.target.value)}
+              onChange={e => {
+                const val = e.target.value;
+                setInvoiceNumber(val);
+                if (
+                  selectedInvoice &&
+                  documentBasis === 'FACTURE_DEFINITIVE' &&
+                  !getInvoiceDefinitiveRef(selectedInvoice)
+                ) {
+                  setInlineDefinitiveNumber(val);
+                }
+              }}
               className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
             />
+            {selectedInvoice &&
+              documentBasis === 'FACTURE_DEFINITIVE' &&
+              getInvoiceProformaRef(selectedInvoice) && (
+                <div className="text-[11px] text-slate-500 mt-1">
+                  Rappel Proforma d&apos;origine :{' '}
+                  <span className="font-mono font-semibold text-slate-700">
+                    {getInvoiceProformaRef(selectedInvoice)?.number}
+                    {getInvoiceProformaRef(selectedInvoice)?.date
+                      ? ` (${getInvoiceProformaRef(selectedInvoice)?.date})`
+                      : ''}
+                  </span>
+                </div>
+              )}
           </div>
 
           <div>
             <label className="block text-xs font-semibold text-slate-700 mb-1">
-              Date de la Facture
+              {selectedInvoice && documentBasis === 'PROFORMA'
+                ? 'Date de la Proforma'
+                : 'Date de la Facture'}
             </label>
             <input
               type="date"
               value={invoiceDate}
-              onChange={e => setInvoiceDate(e.target.value)}
+              onChange={e => {
+                const val = e.target.value;
+                setInvoiceDate(val);
+                if (
+                  selectedInvoice &&
+                  documentBasis === 'FACTURE_DEFINITIVE' &&
+                  !getInvoiceDefinitiveRef(selectedInvoice)
+                ) {
+                  setInlineDefinitiveDate(val);
+                }
+              }}
               className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
             />
           </div>

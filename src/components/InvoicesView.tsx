@@ -20,17 +20,30 @@ import {
   Globe,
   Landmark,
   Download,
+  Printer,
+  Pencil,
 } from 'lucide-react';
 import {
   Invoice,
+  InvoicePaymentScheme,
   InvoicePaymentStatus,
   PaymentOrder,
   Supplier,
   User,
   PaymentDocument,
 } from '../types/payment';
-import { computeInvoicePaymentSummary } from '../utils/invoiceUtils';
+import {
+  computeInvoicePaymentSummary,
+  getInvoiceDefinitiveRef,
+  getInvoiceProformaRef,
+  getOrderDeductionsTotal,
+  getOrderInvoiceGrossAmount,
+} from '../utils/invoiceUtils';
 import { STATUS_META } from '../utils/workflowRules';
+import { downloadTablePdf } from '../utils/tablePdf';
+import { canUserManageInvoice, isAdministrator } from '../utils/adminRules';
+import { AdminEditInvoiceModal } from './AdminEditInvoiceModal';
+import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
 
 interface InvoicesViewProps {
   invoices: Invoice[];
@@ -38,6 +51,15 @@ interface InvoicesViewProps {
   suppliers: Supplier[];
   currentUser: User;
   onCreateInvoice: (payload: Partial<Invoice>) => Promise<Invoice>;
+  onUpdateInvoice?: (id: string, payload: Partial<Invoice>) => Promise<Invoice>;
+  onAttachDefinitiveInvoice?: (
+    id: string,
+    payload: {
+      definitiveInvoiceNumber: string;
+      definitiveInvoiceDate?: string;
+      document?: Omit<PaymentDocument, 'id' | 'orderId'>;
+    }
+  ) => Promise<Invoice>;
   onDeleteInvoice: (id: string) => Promise<void>;
   onCreateOrderFromInvoice: (invoiceId: string) => void;
   onSelectOrder: (orderId: string) => void;
@@ -70,6 +92,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
   suppliers,
   currentUser,
   onCreateInvoice,
+  onUpdateInvoice,
+  onAttachDefinitiveInvoice,
   onDeleteInvoice,
   onCreateOrderFromInvoice,
   onSelectOrder,
@@ -78,11 +102,36 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | InvoicePaymentStatus>('ALL');
   const [showCreateForm, setShowCreateForm] = useState(false);
   const [selectedInvoiceId, setSelectedInvoiceId] = useState<string | null>(null);
-  const [confirmDeleteId, setConfirmDeleteId] = useState<string | null>(null);
+  const [editingInvoiceEntry, setEditingInvoiceEntry] = useState<{
+    invoice: Invoice;
+    linkedOrdersCount: number;
+    allocatedAmount: number;
+  } | null>(null);
+  const [adminDeleteEntry, setAdminDeleteEntry] = useState<{
+    invoice: Invoice;
+    linkedOrdersCount: number;
+  } | null>(null);
+
+  // Inline attach definitive invoice state (detail view)
+  const [attachDefNumber, setAttachDefNumber] = useState('');
+  const [attachDefDate, setAttachDefDate] = useState(new Date().toISOString().split('T')[0]);
+  const [attachDefDoc, setAttachDefDoc] = useState<Omit<PaymentDocument, 'id' | 'orderId'> | undefined>(
+    undefined
+  );
+  const [attachDefError, setAttachDefError] = useState<string | null>(null);
+  const [isAttachingDef, setIsAttachingDef] = useState(false);
+
+  const isAdmin = isAdministrator(currentUser);
 
   // Create form fields
+  const todayStr = new Date().toISOString().split('T')[0];
+  const [paymentScheme, setPaymentScheme] = useState<InvoicePaymentScheme>('STANDARD');
   const [invoiceNumber, setInvoiceNumber] = useState('');
-  const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
+  const [invoiceDate, setInvoiceDate] = useState(todayStr);
+  const [proformaNumber, setProformaNumber] = useState('');
+  const [proformaDate, setProformaDate] = useState(todayStr);
+  const [definitiveInvoiceNumber, setDefinitiveInvoiceNumber] = useState('');
+  const [definitiveInvoiceDate, setDefinitiveInvoiceDate] = useState(todayStr);
   const [dueDate, setDueDate] = useState('');
   const [contractNumber, setContractNumber] = useState('');
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
@@ -144,6 +193,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
       if (q) {
         const matches =
           invoice.invoiceNumber.toLowerCase().includes(q) ||
+          (invoice.proformaNumber || '').toLowerCase().includes(q) ||
+          (invoice.definitiveInvoiceNumber || '').toLowerCase().includes(q) ||
           invoice.supplierName.toLowerCase().includes(q) ||
           (invoice.contractNumber || '').toLowerCase().includes(q) ||
           invoice.purpose.toLowerCase().includes(q);
@@ -154,8 +205,14 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
   }, [enrichedInvoices, searchQuery, statusFilter]);
 
   const resetForm = () => {
+    const today = new Date().toISOString().split('T')[0];
+    setPaymentScheme('STANDARD');
     setInvoiceNumber('');
-    setInvoiceDate(new Date().toISOString().split('T')[0]);
+    setInvoiceDate(today);
+    setProformaNumber('');
+    setProformaDate(today);
+    setDefinitiveInvoiceNumber('');
+    setDefinitiveInvoiceDate(today);
     setDueDate('');
     setContractNumber('');
     setSelectedSupplierId('');
@@ -216,10 +273,22 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     e.preventDefault();
     setFormError(null);
 
-    if (!invoiceNumber.trim()) {
+    const trimmedProf = proformaNumber.trim();
+    const trimmedDef = definitiveInvoiceNumber.trim();
+    const trimmedStd = invoiceNumber.trim();
+
+    if (paymentScheme === '50_LC_50_VIREMENT') {
+      if (!trimmedProf) {
+        setFormError(
+          'Pour un dossier 50 % LC + 50 % Virement, veuillez renseigner le N° de Facture Proforma.'
+        );
+        return;
+      }
+    } else if (!trimmedStd && !trimmedProf) {
       setFormError('Veuillez renseigner le numéro de facture.');
       return;
     }
+
     if (!supplierName.trim()) {
       setFormError('Veuillez renseigner le fournisseur / bénéficiaire.');
       return;
@@ -230,15 +299,39 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
       return;
     }
     if (!purpose.trim()) {
-      setFormError('Veuillez renseigner l’objet / désignation de la facture.');
+      setFormError('Veuillez renseigner l’objet / désignation du dossier.');
       return;
     }
 
     try {
       setIsSubmitting(true);
+      const effectivePayload: Partial<Invoice> =
+        paymentScheme === '50_LC_50_VIREMENT'
+          ? {
+              paymentScheme: '50_LC_50_VIREMENT',
+              proformaNumber: trimmedProf,
+              proformaDate: proformaDate || todayStr,
+              definitiveInvoiceNumber: trimmedDef || undefined,
+              definitiveInvoiceDate: trimmedDef
+                ? definitiveInvoiceDate || todayStr
+                : undefined,
+              invoiceNumber: trimmedDef || trimmedProf,
+              invoiceDate: trimmedDef
+                ? definitiveInvoiceDate || todayStr
+                : proformaDate || todayStr,
+            }
+          : {
+              paymentScheme: 'STANDARD',
+              invoiceNumber: trimmedStd || trimmedProf,
+              invoiceDate: invoiceDate || proformaDate || todayStr,
+              proformaNumber: trimmedProf || undefined,
+              proformaDate: trimmedProf ? proformaDate || invoiceDate : undefined,
+              definitiveInvoiceNumber: trimmedStd || undefined,
+              definitiveInvoiceDate: trimmedStd ? invoiceDate : undefined,
+            };
+
       await onCreateInvoice({
-        invoiceNumber: invoiceNumber.trim(),
-        invoiceDate,
+        ...effectivePayload,
         dueDate: dueDate || undefined,
         contractNumber: contractNumber.trim() || undefined,
         supplierId: selectedSupplierId || undefined,
@@ -265,6 +358,32 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     }
   };
 
+  const handleAttachDefinitiveSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedInvoiceEntry || !onAttachDefinitiveInvoice) return;
+    setAttachDefError(null);
+    if (!attachDefNumber.trim()) {
+      setAttachDefError('Veuillez saisir le N° de la Facture Définitive reçue.');
+      return;
+    }
+    try {
+      setIsAttachingDef(true);
+      await onAttachDefinitiveInvoice(selectedInvoiceEntry.invoice.id, {
+        definitiveInvoiceNumber: attachDefNumber.trim(),
+        definitiveInvoiceDate: attachDefDate || undefined,
+        document: attachDefDoc,
+      });
+      setAttachDefNumber('');
+      setAttachDefDoc(undefined);
+    } catch (err: any) {
+      setAttachDefError(
+        err.message || 'Erreur lors de l’enregistrement de la facture définitive'
+      );
+    } finally {
+      setIsAttachingDef(false);
+    }
+  };
+
   const formatMoney = (val: number, cur: string) =>
     `${val.toLocaleString('fr-FR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} ${cur}`;
 
@@ -275,7 +394,10 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     const { invoice, summary } = selectedInvoiceEntry;
     const statusMeta = STATUS_BADGE[summary.paymentStatus];
     const canCreateOrder = summary.remainingAmount > 0.005;
-    const canDelete = summary.linkedOrders.length === 0;
+    const canManageInvoice = canUserManageInvoice(currentUser, invoice).allowed;
+    const profRef = getInvoiceProformaRef(invoice);
+    const defRef = getInvoiceDefinitiveRef(invoice);
+    const isMixedScheme = invoice.paymentScheme === '50_LC_50_VIREMENT';
 
     return (
       <div className="space-y-5 max-w-6xl mx-auto pb-12">
@@ -286,7 +408,6 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
               type="button"
               onClick={() => {
                 setSelectedInvoiceId(null);
-                setConfirmDeleteId(null);
               }}
               className="p-2 text-slate-500 hover:text-slate-900 hover:bg-slate-100 rounded-lg transition-colors shrink-0"
               title="Retour au tableau des factures"
@@ -299,6 +420,16 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                 <span className="text-base font-bold font-mono text-blue-700 whitespace-nowrap">
                   {invoice.invoiceNumber}
                 </span>
+                {isMixedScheme && (
+                  <span className="text-[11px] font-bold bg-indigo-50 text-indigo-800 px-2 py-0.5 rounded border border-indigo-200 whitespace-nowrap">
+                    50 % LC (Proforma) + 50 % Virement (Facture Déf.)
+                  </span>
+                )}
+                {profRef && !defRef && (
+                  <span className="text-[11px] font-semibold bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200 whitespace-nowrap">
+                    Sur Proforma · Attente Facture Définitive
+                  </span>
+                )}
                 {invoice.isDemo && (
                   <span className="text-[10px] font-semibold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded border border-amber-200 whitespace-nowrap">
                     DONNÉE DE DÉMO
@@ -326,39 +457,38 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
               </button>
             )}
 
-            {canDelete &&
-              (confirmDeleteId === invoice.id ? (
-                <div className="inline-flex items-center gap-1.5 bg-rose-50 border border-rose-200 px-2.5 py-1 rounded-lg">
-                  <span className="text-[11px] font-medium text-rose-800">Supprimer ?</span>
-                  <button
-                    type="button"
-                    onClick={async () => {
-                      await onDeleteInvoice(invoice.id);
-                      setConfirmDeleteId(null);
-                      setSelectedInvoiceId(null);
-                    }}
-                    className="px-2.5 py-1 rounded bg-rose-600 text-white text-[11px] font-bold hover:bg-rose-700"
-                  >
-                    Confirmer
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => setConfirmDeleteId(null)}
-                    className="px-2.5 py-1 rounded bg-white text-slate-600 text-[11px] font-semibold border border-slate-200 hover:bg-slate-100"
-                  >
-                    Annuler
-                  </button>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={() => setConfirmDeleteId(invoice.id)}
-                  className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-medium text-rose-700 bg-white hover:bg-rose-50 border border-rose-200 rounded-lg transition-colors whitespace-nowrap"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                  <span>Supprimer</span>
-                </button>
-              ))}
+            {canManageInvoice && onUpdateInvoice && (
+              <button
+                type="button"
+                onClick={() =>
+                  setEditingInvoiceEntry({
+                    invoice,
+                    linkedOrdersCount: summary.linkedOrders.length,
+                    allocatedAmount: summary.allocatedAmount,
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors whitespace-nowrap"
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>Modifier</span>
+              </button>
+            )}
+
+            {canManageInvoice && (
+              <button
+                type="button"
+                onClick={() =>
+                  setAdminDeleteEntry({
+                    invoice,
+                    linkedOrdersCount: summary.linkedOrders.length,
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-white hover:bg-rose-50 border border-rose-300 rounded-lg transition-colors whitespace-nowrap"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                <span>Supprimer</span>
+              </button>
+            )}
           </div>
         </div>
 
@@ -376,11 +506,17 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
 
             <div className="p-3.5 rounded-lg bg-blue-50/70 border border-blue-200">
               <div className="text-[11px] font-semibold uppercase tracking-wider text-blue-700">
-                Déjà Ordonnancé
+                Déjà Ordonnancé (Brut)
               </div>
               <div className="text-lg font-bold font-mono text-blue-900 mt-1">
                 {formatMoney(summary.allocatedAmount, invoice.currency)}
               </div>
+              {summary.deductionsTotal > 0 && (
+                <div className="text-[11px] text-blue-800/80 mt-0.5 font-mono">
+                  Net : {formatMoney(summary.netOrderedAmount, invoice.currency)} · Déd. : −
+                  {formatMoney(summary.deductionsTotal, invoice.currency)}
+                </div>
+              )}
             </div>
 
             <div className="p-3.5 rounded-lg bg-amber-50/70 border border-amber-200">
@@ -417,18 +553,155 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
           </div>
         </div>
 
+        {/* Attach Definitive Invoice Inline Card when Dossier started on Proforma */}
+        {profRef && !defRef && onAttachDefinitiveInvoice && (
+          <form
+            onSubmit={handleAttachDefinitiveSubmit}
+            className="bg-amber-50/70 rounded-xl border-2 border-amber-300 p-5 shadow-2xs space-y-3"
+          >
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div>
+                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-950 flex items-center gap-2">
+                  <FileText className="w-4 h-4 text-amber-700" />
+                  <span>Renseigner la Facture Définitive reçue</span>
+                </h3>
+                <p className="text-xs text-amber-900/80 mt-0.5">
+                  Ce dossier est actuellement ouvert sur Proforma{' '}
+                  <strong className="font-mono">{profRef.number}</strong>. Rattachez la Facture
+                  Définitive pour l’émission du Virement : le montant total du dossier (
+                  <strong className="font-mono">
+                    {formatMoney(invoice.totalAmount, invoice.currency)}
+                  </strong>
+                  ) reste inchangé.
+                </p>
+              </div>
+            </div>
+
+            {attachDefError && (
+              <div className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 text-rose-600 shrink-0" />
+                <span>{attachDefError}</span>
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
+              <div className="sm:col-span-4">
+                <label className="block text-[11px] font-semibold text-amber-950 mb-1">
+                  N° Facture Définitive <span className="text-rose-500">*</span>
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex : FAC-DEF-2026-088"
+                  value={attachDefNumber}
+                  onChange={e => setAttachDefNumber(e.target.value)}
+                  className="w-full bg-white border border-amber-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600"
+                />
+              </div>
+              <div className="sm:col-span-3">
+                <label className="block text-[11px] font-semibold text-amber-950 mb-1">
+                  Date Facture Définitive
+                </label>
+                <input
+                  type="date"
+                  value={attachDefDate}
+                  onChange={e => setAttachDefDate(e.target.value)}
+                  className="w-full bg-white border border-amber-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600"
+                />
+              </div>
+              <div className="sm:col-span-3">
+                <label className="inline-flex items-center justify-center gap-1.5 w-full px-3 py-2 bg-white border border-amber-300 hover:bg-amber-100/50 rounded-lg text-xs font-semibold text-amber-900 cursor-pointer truncate">
+                  <Upload className="w-3.5 h-3.5 shrink-0" />
+                  <span className="truncate">
+                    {attachDefDoc ? attachDefDoc.name : 'Joindre PDF (optionnel)'}
+                  </span>
+                  <input
+                    type="file"
+                    accept=".pdf,.png,.jpg,.jpeg"
+                    onChange={e => {
+                      const file = e.target.files?.[0];
+                      if (!file) return;
+                      const reader = new FileReader();
+                      reader.onload = () => {
+                        setAttachDefDoc({
+                          name: file.name,
+                          type: 'FACTURE',
+                          docRole: 'FACTURE_DEFINITIVE',
+                          size: file.size,
+                          mimeType: file.type || 'application/pdf',
+                          uploadedAt: new Date().toISOString(),
+                          uploadedBy: currentUser.name,
+                          dataBase64: reader.result as string,
+                        });
+                      };
+                      reader.readAsDataURL(file);
+                      e.target.value = '';
+                    }}
+                    className="hidden"
+                  />
+                </label>
+              </div>
+              <div className="sm:col-span-2">
+                <button
+                  type="submit"
+                  disabled={isAttachingDef}
+                  className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-700 hover:bg-amber-800 text-white rounded-lg text-xs font-bold transition-colors shadow-xs disabled:opacity-60"
+                >
+                  <CheckCircle2 className="w-3.5 h-3.5" />
+                  <span>{isAttachingDef ? 'Enreg...' : 'Valider'}</span>
+                </button>
+              </div>
+            </div>
+          </form>
+        )}
+
         {/* Details Grid: Invoice Info & Supplier Bank */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-5">
           {/* General Info */}
           <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs space-y-3">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider pb-2 border-b border-slate-100 flex items-center gap-2">
               <FileSpreadsheet className="w-4 h-4 text-blue-700" />
-              <span>Informations de la Facture</span>
+              <span>Informations du Dossier d&apos;Engagement</span>
             </h3>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
               <div>
-                <dt className="text-slate-500">N° Facture</dt>
-                <dd className="font-mono font-bold text-slate-900 mt-0.5">{invoice.invoiceNumber}</dd>
+                <dt className="text-slate-500">Réf. Proforma (LC)</dt>
+                <dd className="font-mono font-semibold text-slate-900 mt-0.5">
+                  {profRef ? (
+                    <>
+                      {profRef.number}
+                      {profRef.date ? (
+                        <span className="text-slate-500 font-normal"> ({profRef.date})</span>
+                      ) : null}
+                    </>
+                  ) : (
+                    '—'
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Réf. Facture Définitive</dt>
+                <dd className="font-mono font-bold text-blue-700 mt-0.5">
+                  {defRef ? (
+                    <>
+                      {defRef.number}
+                      {defRef.date ? (
+                        <span className="text-slate-500 font-normal"> ({defRef.date})</span>
+                      ) : null}
+                    </>
+                  ) : (
+                    <span className="text-amber-700 font-sans font-semibold">
+                      En attente de réception
+                    </span>
+                  )}
+                </dd>
+              </div>
+              <div>
+                <dt className="text-slate-500">Schéma de règlement</dt>
+                <dd className="font-semibold text-slate-900 mt-0.5">
+                  {isMixedScheme
+                    ? '50 % LC (Proforma) + 50 % Virement'
+                    : 'Standard'}
+                </dd>
               </div>
               <div>
                 <dt className="text-slate-500">N° Contrat / Marché</dt>
@@ -437,15 +710,15 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                 </dd>
               </div>
               <div>
-                <dt className="text-slate-500">Date Facture</dt>
+                <dt className="text-slate-500">Date document actif</dt>
                 <dd className="font-mono text-slate-900 mt-0.5">{invoice.invoiceDate}</dd>
               </div>
               <div>
-                <dt className="text-slate-500">Date d'Échéance</dt>
+                <dt className="text-slate-500">Date d&apos;Échéance</dt>
                 <dd className="font-mono text-slate-900 mt-0.5">{invoice.dueDate || '—'}</dd>
               </div>
               <div className="col-span-2">
-                <dt className="text-slate-500">Nature de l'opération</dt>
+                <dt className="text-slate-500">Nature de l&apos;opération</dt>
                 <dd className="font-medium text-slate-900 mt-0.5">{invoice.operationNature}</dd>
               </div>
               <div className="col-span-2">
@@ -513,20 +786,69 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
 
         {/* Linked Payment Orders Table */}
         <div className="bg-white rounded-xl border border-slate-200 shadow-2xs overflow-hidden">
-          <div className="p-4 border-b border-slate-100 flex items-center justify-between">
+          <div className="p-4 border-b border-slate-100 flex flex-wrap items-center justify-between gap-2">
             <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
               Ordres de Paiement Rattachés ({summary.linkedOrders.length})
             </h3>
-            {canCreateOrder && (
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
-                onClick={() => onCreateOrderFromInvoice(invoice.id)}
-                className="text-xs font-semibold text-blue-700 hover:text-blue-900 flex items-center gap-1"
+                onClick={() =>
+                  downloadTablePdf({
+                    title: `Ordres de Paiement - Facture ${invoice.invoiceNumber}`,
+                    subtitle: `${invoice.supplierName} | Montant : ${formatMoney(
+                      invoice.totalAmount,
+                      invoice.currency
+                    )} | Reste à payer : ${formatMoney(
+                      summary.remainingAmount,
+                      invoice.currency
+                    )}`,
+                    filename: `Facture_${invoice.invoiceNumber}_Ordres_MTK.pdf`,
+                    columns: [
+                      { header: 'N° Ordre', widthRatio: 1.2 },
+                      { header: 'Date Création', widthRatio: 0.9 },
+                      { header: 'Banque MTK', widthRatio: 1.6 },
+                      { header: 'Mode', widthRatio: 0.9 },
+                      { header: 'Déductions', align: 'right', widthRatio: 1.1 },
+                      { header: 'Montant Net / Imputé', align: 'right', widthRatio: 1.4 },
+                      { header: 'Statut', widthRatio: 1.2 },
+                    ],
+                    rows: summary.linkedOrders.map(ord => {
+                      const dedTotal = getOrderDeductionsTotal(ord);
+                      const grossAmt = getOrderInvoiceGrossAmount(ord);
+                      return [
+                        ord.orderNumber,
+                        ord.createdAt.split('T')[0],
+                        ord.bankName,
+                        ord.transferType || 'VIREMENT',
+                        dedTotal > 0 ? `-${formatMoney(dedTotal, ord.currency)}` : '—',
+                        dedTotal > 0
+                          ? `${formatMoney(ord.amount, ord.currency)} (Brut ${formatMoney(
+                              grossAmt,
+                              ord.currency
+                            )})`
+                          : formatMoney(ord.amount, ord.currency),
+                        STATUS_META[ord.status]?.label || ord.status,
+                      ];
+                    }),
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors whitespace-nowrap"
               >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Émettre un ordre sur cette facture</span>
+                <Printer className="w-3.5 h-3.5 text-slate-600" />
+                <span>Imprimer tableau PDF</span>
               </button>
-            )}
+              {canCreateOrder && (
+                <button
+                  type="button"
+                  onClick={() => onCreateOrderFromInvoice(invoice.id)}
+                  className="text-xs font-semibold text-blue-700 hover:text-blue-900 flex items-center gap-1 whitespace-nowrap"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Émettre un ordre sur cette facture</span>
+                </button>
+              )}
+            </div>
           </div>
 
           {summary.linkedOrders.length === 0 ? (
@@ -560,6 +882,8 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                 <tbody className="divide-y divide-slate-100">
                   {summary.linkedOrders.map(ord => {
                     const ordMeta = STATUS_META[ord.status];
+                    const dedTotal = getOrderDeductionsTotal(ord);
+                    const grossAmt = getOrderInvoiceGrossAmount(ord);
                     return (
                       <tr
                         key={ord.id}
@@ -567,7 +891,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                         className="hover:bg-blue-50/40 cursor-pointer transition-colors"
                       >
                         <td className="py-3 px-4 font-mono font-bold text-blue-700 whitespace-nowrap">
-                          {ord.orderNumber}
+                          <div>{ord.orderNumber}</div>
+                          <div className="text-[10px] font-normal text-slate-500">
+                            {ord.documentBasis === 'PROFORMA'
+                              ? `Proforma : ${ord.invoiceNumber}`
+                              : `Facture : ${ord.invoiceNumber}`}
+                          </div>
                         </td>
                         <td className="py-3 px-4 font-mono text-slate-600 whitespace-nowrap">
                           {ord.createdAt.split('T')[0]}
@@ -575,7 +904,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                         <td className="py-3 px-4 text-slate-800">{ord.bankName}</td>
                         <td className="py-3 px-4 font-mono text-slate-600">{ord.transferType || 'VIREMENT'}</td>
                         <td className="py-3 px-4 text-right font-mono font-bold text-slate-900 whitespace-nowrap">
-                          {formatMoney(ord.amount, ord.currency)}
+                          <div>{formatMoney(ord.amount, ord.currency)}</div>
+                          {dedTotal > 0 && (
+                            <div className="text-[10px] font-normal text-amber-700">
+                              Brut {formatMoney(grossAmt, ord.currency)} · Déd. −
+                              {formatMoney(dedTotal, ord.currency)}
+                            </div>
+                          )}
                         </td>
                         <td className="py-3 px-4 whitespace-nowrap">
                           <span
@@ -631,6 +966,38 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
               ))}
             </div>
           </div>
+        )}
+
+        {editingInvoiceEntry && onUpdateInvoice && (
+          <AdminEditInvoiceModal
+            invoice={editingInvoiceEntry.invoice}
+            suppliers={suppliers}
+            linkedOrdersCount={editingInvoiceEntry.linkedOrdersCount}
+            allocatedAmount={editingInvoiceEntry.allocatedAmount}
+            isAdmin={isAdmin}
+            onSave={async (id, payload) => {
+              await onUpdateInvoice(id, payload);
+            }}
+            onClose={() => setEditingInvoiceEntry(null)}
+          />
+        )}
+
+        {adminDeleteEntry && (
+          <AdminConfirmDeleteModal
+            title="Supprimer définitivement cette facture"
+            entityRef={adminDeleteEntry.invoice.invoiceNumber}
+            description={`Vous êtes sur le point de supprimer la facture ${adminDeleteEntry.invoice.invoiceNumber} (${adminDeleteEntry.invoice.supplierName} — ${formatMoney(adminDeleteEntry.invoice.totalAmount, adminDeleteEntry.invoice.currency)}).`}
+            warningNote={
+              adminDeleteEntry.linkedOrdersCount > 0
+                ? `${adminDeleteEntry.linkedOrdersCount} ordre(s) de paiement sont actuellement rattaché(s) à cette facture : leur lien vers cette facture sera détaché automatiquement (les ordres resteront conservés).`
+                : undefined
+            }
+            onConfirm={async () => {
+              await onDeleteInvoice(adminDeleteEntry.invoice.id);
+              setSelectedInvoiceId(null);
+            }}
+            onClose={() => setAdminDeleteEntry(null)}
+          />
         )}
       </div>
     );
@@ -748,58 +1115,219 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
             </div>
           )}
 
-          {/* Row 1: Références facture */}
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                N° Facture <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="text"
-                placeholder="Ex : FAC-2026-045"
-                value={invoiceNumber}
-                onChange={e => setInvoiceNumber(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
+          {/* Schéma de règlement du dossier */}
+          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
+            <div className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+              Schéma de Règlement &amp; Références Documentaires
             </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Date Facture <span className="text-rose-500">*</span>
-              </label>
-              <input
-                type="date"
-                value={invoiceDate}
-                onChange={e => setInvoiceDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                Date d'Échéance
-              </label>
-              <input
-                type="date"
-                value={dueDate}
-                onChange={e => setDueDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-700 mb-1">
-                N° Contrat / Marché
-              </label>
-              <input
-                type="text"
-                placeholder="Ex : CT-2026/MTK-042"
-                value={contractNumber}
-                onChange={e => setContractNumber(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
+              <button
+                type="button"
+                onClick={() => setPaymentScheme('STANDARD')}
+                className={`p-3 rounded-lg border text-left transition-colors ${
+                  paymentScheme === 'STANDARD'
+                    ? 'bg-blue-50 border-blue-600 ring-1 ring-blue-600'
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="text-xs font-bold text-slate-900">
+                  Facture Standard (Règlement classique)
+                </div>
+                <div className="text-[11px] text-slate-500 mt-0.5">
+                  Une facture unique (règlement en 1 ou plusieurs ordres) avec Proforma optionnelle.
+                </div>
+              </button>
+              <button
+                type="button"
+                onClick={() => setPaymentScheme('50_LC_50_VIREMENT')}
+                className={`p-3 rounded-lg border text-left transition-colors ${
+                  paymentScheme === '50_LC_50_VIREMENT'
+                    ? 'bg-indigo-50 border-indigo-600 ring-1 ring-indigo-600'
+                    : 'bg-white border-slate-200 hover:border-slate-300'
+                }`}
+              >
+                <div className="text-xs font-bold text-indigo-950">
+                  Dossier Mixte : 50 % LC (Proforma) + 50 % Virement (Facture Déf.)
+                </div>
+                <div className="text-[11px] text-indigo-800/80 mt-0.5">
+                  Ouverture sur Proforma pour la LC, puis rattachement de la Facture Définitive pour le Virement.
+                </div>
+              </button>
             </div>
           </div>
+
+          {/* Row 1: Références facture / Proforma */}
+          {paymentScheme === '50_LC_50_VIREMENT' ? (
+            <div className="p-4 rounded-xl bg-indigo-50/50 border border-indigo-200 space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-indigo-950 mb-1">
+                    N° Proforma (pour la LC) <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex : PROF-2026-045"
+                    value={proformaNumber}
+                    onChange={e => setProformaNumber(e.target.value)}
+                    className="w-full bg-white border border-indigo-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-indigo-950 mb-1">
+                    Date Proforma <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={proformaDate}
+                    onChange={e => setProformaDate(e.target.value)}
+                    className="w-full bg-white border border-indigo-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    N° Facture Définitive (si reçue)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Laisser vide si en attente"
+                    value={definitiveInvoiceNumber}
+                    onChange={e => setDefinitiveInvoiceNumber(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Date Facture Définitive
+                  </label>
+                  <input
+                    type="date"
+                    value={definitiveInvoiceDate}
+                    onChange={e => setDefinitiveInvoiceDate(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                  />
+                </div>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Date d&apos;Échéance
+                  </label>
+                  <input
+                    type="date"
+                    value={dueDate}
+                    onChange={e => setDueDate(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    N° Contrat / Marché
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex : CT-2026/MTK-042"
+                    value={contractNumber}
+                    onChange={e => setContractNumber(e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                  />
+                </div>
+              </div>
+              {parseFloat(totalAmount) > 0 && (
+                <div className="p-2.5 rounded-lg bg-white border border-indigo-200 text-[11px] text-indigo-950 flex flex-wrap items-center justify-between gap-2">
+                  <span>
+                    <strong>Répartition automatique prévue :</strong> Tranche 1 (50 % LC sur Proforma) :{' '}
+                    <strong className="font-mono">
+                      {formatMoney(Number((parseFloat(totalAmount) / 2).toFixed(2)), currency)}
+                    </strong>{' '}
+                    · Tranche 2 (50 % Virement sur Facture Définitive) :{' '}
+                    <strong className="font-mono">
+                      {formatMoney(Number((parseFloat(totalAmount) / 2).toFixed(2)), currency)}
+                    </strong>
+                  </span>
+                </div>
+              )}
+            </div>
+          ) : (
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    N° Facture <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex : FAC-2026-045"
+                    value={invoiceNumber}
+                    onChange={e => setInvoiceNumber(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Date Facture <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    value={invoiceDate}
+                    onChange={e => setInvoiceDate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    Date d&apos;Échéance
+                  </label>
+                  <input
+                    type="date"
+                    value={dueDate}
+                    onChange={e => setDueDate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    N° Contrat / Marché
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex : CT-2026/MTK-042"
+                    value={contractNumber}
+                    onChange={e => setContractNumber(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    N° Proforma associée (optionnel)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Ex : PROF-2026-045 (si issue d'une Proforma)"
+                    value={proformaNumber}
+                    onChange={e => setProformaNumber(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Date Proforma (si renseignée)
+                  </label>
+                  <input
+                    type="date"
+                    value={proformaDate}
+                    onChange={e => setProformaDate(e.target.value)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Row 2: Fournisseur */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
@@ -1082,6 +1610,39 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
               {tab.label}
             </button>
           ))}
+
+          <button
+            type="button"
+            onClick={() =>
+              downloadTablePdf({
+                title: 'Registre des Factures Fournisseurs MTK',
+                subtitle: `Filtre statut : ${
+                  statusFilter === 'ALL' ? 'Toutes' : STATUS_BADGE[statusFilter].label
+                }${searchQuery.trim() ? ` | Recherche : "${searchQuery.trim()}"` : ''}`,
+                filename: `Tableau_Factures_MTK_${new Date().toISOString().split('T')[0]}.pdf`,
+                columns: [
+                  { header: 'N° Facture', widthRatio: 1.2 },
+                  { header: 'Date', widthRatio: 0.9 },
+                  { header: 'Fournisseur', widthRatio: 2.0 },
+                  { header: 'Montant Facture', align: 'right', widthRatio: 1.2 },
+                  { header: 'Reste à Payer', align: 'right', widthRatio: 1.2 },
+                  { header: 'Statut', widthRatio: 1.2 },
+                ],
+                rows: filteredInvoices.map(({ invoice, summary }) => [
+                  invoice.invoiceNumber,
+                  invoice.invoiceDate,
+                  invoice.supplierName,
+                  formatMoney(invoice.totalAmount, invoice.currency),
+                  formatMoney(summary.remainingAmount, invoice.currency),
+                  STATUS_BADGE[summary.paymentStatus].label,
+                ]),
+              })
+            }
+            className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-50 border border-slate-300 rounded-lg transition-colors whitespace-nowrap"
+          >
+            <Printer className="w-3.5 h-3.5 text-slate-600" />
+            <span>Imprimer tableau PDF</span>
+          </button>
         </div>
       </div>
 
@@ -1110,11 +1671,13 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
               ) : (
                 filteredInvoices.map(({ invoice, summary }) => {
                   const statusMeta = STATUS_BADGE[summary.paymentStatus];
+                  const canManageRow = canUserManageInvoice(currentUser, invoice).allowed;
+                  const rowProfRef = getInvoiceProformaRef(invoice);
+                  const rowDefRef = getInvoiceDefinitiveRef(invoice);
                   return (
                     <tr
                       key={invoice.id}
                       onClick={() => {
-                        setConfirmDeleteId(null);
                         setSelectedInvoiceId(invoice.id);
                       }}
                       className="hover:bg-blue-50/40 transition-colors cursor-pointer group"
@@ -1124,12 +1687,24 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                           <span className="font-mono font-bold text-blue-700 group-hover:underline">
                             {invoice.invoiceNumber}
                           </span>
+                          {invoice.paymentScheme === '50_LC_50_VIREMENT' && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
+                              50% LC / 50% Vir.
+                            </span>
+                          )}
                           {invoice.isDemo && (
                             <span className="text-[10px] font-semibold px-1.5 py-0.5 rounded bg-amber-50 text-amber-700 border border-amber-200">
                               Démo
                             </span>
                           )}
                         </div>
+                        {rowProfRef && (
+                          <div className="text-[10px] font-mono text-slate-500 mt-0.5">
+                            {rowDefRef
+                              ? `Proforma : ${rowProfRef.number}`
+                              : 'Proforma seule · Attente Facture Déf.'}
+                          </div>
+                        )}
                       </td>
 
                       <td className="py-3.5 px-4 font-mono text-slate-600 whitespace-nowrap">
@@ -1160,11 +1735,63 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                         </span>
                       </td>
 
-                      <td className="py-3.5 px-4 text-right whitespace-nowrap">
-                        <span className="inline-flex items-center gap-1 text-slate-400 group-hover:text-blue-700 font-medium">
-                          <span>Voir</span>
-                          <ChevronRight className="w-4 h-4" />
-                        </span>
+                      <td
+                        className="py-3.5 px-4 text-right whitespace-nowrap"
+                        onClick={e => e.stopPropagation()}
+                      >
+                        <div className="inline-flex items-center justify-end gap-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedInvoiceId(invoice.id);
+                            }}
+                            className="inline-flex items-center gap-1 text-slate-500 hover:text-blue-700 font-medium px-1.5 py-1 rounded hover:bg-blue-50"
+                          >
+                            <span>Voir</span>
+                            <ChevronRight className="w-4 h-4" />
+                          </button>
+                          {canManageRow && onUpdateInvoice && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setEditingInvoiceEntry({
+                                  invoice,
+                                  linkedOrdersCount: summary.linkedOrders.length,
+                                  allocatedAmount: summary.allocatedAmount,
+                                })
+                              }
+                              className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded-md transition-colors"
+                              title={
+                                isAdmin
+                                  ? 'Modifier la facture (Administrateur)'
+                                  : 'Modifier ma facture'
+                              }
+                              aria-label={`Modifier la facture ${invoice.invoiceNumber}`}
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                          {canManageRow && (
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setAdminDeleteEntry({
+                                  invoice,
+                                  linkedOrdersCount: summary.linkedOrders.length,
+                                })
+                              }
+                              className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-md transition-colors"
+                              title={
+                                isAdmin
+                                  ? 'Supprimer la facture (Administrateur)'
+                                  : 'Supprimer ma facture'
+                              }
+                              aria-label={`Supprimer la facture ${invoice.invoiceNumber}`}
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                   );
@@ -1174,6 +1801,37 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
           </table>
         </div>
       </div>
+
+      {editingInvoiceEntry && onUpdateInvoice && (
+        <AdminEditInvoiceModal
+          invoice={editingInvoiceEntry.invoice}
+          suppliers={suppliers}
+          linkedOrdersCount={editingInvoiceEntry.linkedOrdersCount}
+          allocatedAmount={editingInvoiceEntry.allocatedAmount}
+          isAdmin={isAdmin}
+          onSave={async (id, payload) => {
+            await onUpdateInvoice(id, payload);
+          }}
+          onClose={() => setEditingInvoiceEntry(null)}
+        />
+      )}
+
+      {adminDeleteEntry && (
+        <AdminConfirmDeleteModal
+          title="Supprimer définitivement cette facture"
+          entityRef={adminDeleteEntry.invoice.invoiceNumber}
+          description={`Vous êtes sur le point de supprimer la facture ${adminDeleteEntry.invoice.invoiceNumber} (${adminDeleteEntry.invoice.supplierName} — ${formatMoney(adminDeleteEntry.invoice.totalAmount, adminDeleteEntry.invoice.currency)}).`}
+          warningNote={
+            adminDeleteEntry.linkedOrdersCount > 0
+              ? `${adminDeleteEntry.linkedOrdersCount} ordre(s) de paiement sont actuellement rattaché(s) à cette facture : leur lien vers cette facture sera détaché automatiquement (les ordres resteront conservés).`
+              : undefined
+          }
+          onConfirm={async () => {
+            await onDeleteInvoice(adminDeleteEntry.invoice.id);
+          }}
+          onClose={() => setAdminDeleteEntry(null)}
+        />
+      )}
     </div>
   );
 };

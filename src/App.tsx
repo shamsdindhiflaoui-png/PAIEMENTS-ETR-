@@ -30,12 +30,15 @@ import {
   CurrencyConsultation,
   ExchangeQuote,
   Invoice,
+  OrderDeduction,
 } from './types/payment';
-import { CheckCircle2, AlertCircle, Info, X } from 'lucide-react';
+import { CheckCircle2, AlertCircle, Info, X, LogIn, ShieldCheck } from 'lucide-react';
 import { STATUS_META } from './utils/workflowRules';
-import { getAvailableInvoicesForOrder } from './utils/invoiceUtils';
+import { doesOrderBelongToInvoice, getAvailableInvoicesForOrder } from './utils/invoiceUtils';
+import { useAuth } from './contexts/AuthContext';
 
 export default function App() {
+  const { firebaseUser, authLoading, authError, signInWithGoogle, signOutUser } = useAuth();
   const [activeView, setActiveView] = useState<NavItem | 'order_detail' | 'consultation_detail'>('dashboard');
   const [selectedOrderId, setSelectedOrderId] = useState<string | null>(null);
   const [selectedConsultationId, setSelectedConsultationId] = useState<string | null>(null);
@@ -83,8 +86,9 @@ export default function App() {
     }, 4500);
   };
 
-  // Initial load
+  // Initial load (only after Firebase Auth is ready & authenticated)
   const loadAllData = useCallback(async () => {
+    if (!firebaseUser) return;
     try {
       const activeFilters: FilterParams = {
         ...filters,
@@ -108,6 +112,14 @@ export default function App() {
       setBanks(banksRes);
       setSuppliers(suppliersRes);
       setUsers(usersRes);
+      setCurrentUser(prev => {
+        const matched = usersRes.find(u => u.id === prev.id);
+        if (matched && matched.userCode && matched.userCode !== prev.userCode) {
+          api.setCurrentUser(matched);
+          return matched;
+        }
+        return prev;
+      });
       setAuditLogs(logsRes);
       setConsultations(
         showDemoData ? consultationsRes : consultationsRes.filter(c => !c.isDemo)
@@ -116,13 +128,15 @@ export default function App() {
       console.error('Error fetching data:', err);
       showToast('error', err.message || 'Erreur lors du chargement des données');
     }
-  }, [filters, showDemoData]);
+  }, [filters, showDemoData, firebaseUser]);
 
   useEffect(() => {
     api.initUser();
     setCurrentUser(api.getCurrentUser());
-    loadAllData();
-  }, [loadAllData]);
+    if (firebaseUser) {
+      loadAllData();
+    }
+  }, [loadAllData, firebaseUser]);
 
   // User Switcher
   const handleUserChange = (user: User) => {
@@ -144,6 +158,18 @@ export default function App() {
     }
   };
 
+  const handleUpdateInvoice = async (id: string, payload: Partial<Invoice>) => {
+    try {
+      const updated = await api.updateInvoice(id, payload);
+      showToast('success', `Facture ${updated.invoiceNumber} modifiée avec succès`);
+      await loadAllData();
+      return updated;
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la modification de la facture');
+      throw err;
+    }
+  };
+
   const handleDeleteInvoice = async (id: string) => {
     try {
       await api.deleteInvoice(id);
@@ -151,6 +177,31 @@ export default function App() {
       await loadAllData();
     } catch (err: any) {
       showToast('error', err.message || 'Erreur lors de la suppression de la facture');
+      throw err;
+    }
+  };
+
+  const handleAttachDefinitiveInvoice = async (
+    id: string,
+    payload: {
+      definitiveInvoiceNumber: string;
+      definitiveInvoiceDate?: string;
+      document?: any;
+    }
+  ) => {
+    try {
+      const updated = await api.attachDefinitiveInvoice(id, payload);
+      showToast(
+        'success',
+        `Facture définitive ${updated.definitiveInvoiceNumber || updated.invoiceNumber} rattachée au dossier`
+      );
+      await loadAllData();
+      return updated;
+    } catch (err: any) {
+      showToast(
+        'error',
+        err.message || 'Erreur lors de l’enregistrement de la facture définitive'
+      );
       throw err;
     }
   };
@@ -163,7 +214,12 @@ export default function App() {
   };
 
   // Create Order
-  const handleCreateOrder = async (orderData: Partial<PaymentOrder>) => {
+  const handleCreateOrder = async (
+    orderData: Partial<PaymentOrder> & {
+      definitiveInvoiceNumber?: string;
+      definitiveInvoiceDate?: string;
+    }
+  ) => {
     try {
       const created = await api.createOrder(orderData);
       showToast('success', `Ordre de paiement ${created.orderNumber} créé avec succès`);
@@ -173,6 +229,33 @@ export default function App() {
       setActiveView('order_detail');
     } catch (err: any) {
       showToast('error', err.message || 'Erreur création');
+      throw err;
+    }
+  };
+
+  // Admin Update & Delete Order
+  const handleUpdateOrder = async (id: string, payload: Partial<PaymentOrder>) => {
+    try {
+      const updated = await api.updateOrder(id, payload);
+      showToast('success', `Ordre de paiement ${updated.orderNumber} modifié avec succès`);
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la modification de l’ordre');
+      throw err;
+    }
+  };
+
+  const handleDeleteOrder = async (id: string) => {
+    try {
+      await api.deleteOrder(id);
+      if (selectedOrderId === id) {
+        setSelectedOrderId(null);
+        setActiveView('orders_list');
+      }
+      showToast('info', 'Ordre de paiement supprimé avec succès');
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la suppression de l’ordre');
       throw err;
     }
   };
@@ -247,6 +330,28 @@ export default function App() {
       await loadAllData();
     } catch (err: any) {
       showToast('error', err.message || 'Erreur ajout pièce');
+    }
+  };
+
+  // Update Deductions directly on an existing single order
+  const handleUpdateOrderDeductions = async (payload: {
+    deductions: OrderDeduction[];
+    grossAmount?: number;
+  }) => {
+    if (!selectedOrderId) return;
+    try {
+      const updated = await api.updateOrderDeductions(selectedOrderId, payload);
+      showToast(
+        'success',
+        `Déductions mises à jour sur l'ordre ${updated.orderNumber} — Net à transférer : ${updated.amount.toLocaleString(
+          'fr-FR',
+          { minimumFractionDigits: 2, maximumFractionDigits: 2 }
+        )} ${updated.currency}`
+      );
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la mise à jour des déductions');
+      throw err;
     }
   };
 
@@ -366,6 +471,35 @@ export default function App() {
     }
   };
 
+  const handleUpdateConsultation = async (
+    consultationId: string,
+    payload: Partial<CurrencyConsultation>
+  ) => {
+    try {
+      const updated = await api.updateConsultation(consultationId, payload);
+      showToast('success', `Consultation ${updated.consultationNumber} modifiée avec succès`);
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la modification de la consultation');
+      throw err;
+    }
+  };
+
+  const handleDeleteConsultation = async (consultationId: string) => {
+    try {
+      await api.deleteConsultation(consultationId);
+      if (selectedConsultationId === consultationId) {
+        setSelectedConsultationId(null);
+        setActiveView('consultations');
+      }
+      showToast('info', 'Consultation supprimée avec succès');
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la suppression de la consultation');
+      throw err;
+    }
+  };
+
   // Current selected order / consultation
   const selectedOrder = orders.find(o => o.id === selectedOrderId);
   const selectedConsultation = consultations.find(c => c.id === selectedConsultationId);
@@ -394,8 +528,89 @@ export default function App() {
       ? 'consultations'
       : activeView;
 
+  const hasActivePrintModal = Boolean(
+    printModalOrder || pdfModalConsultation || confirmationModalState
+  );
+
+  const handleExportCsv = async () => {
+    try {
+      await api.exportCsv();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de l’export Excel');
+    }
+  };
+
+  if (authLoading) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 shadow-sm flex flex-col items-center gap-3 max-w-sm w-full">
+          <img
+            src="/assets/aistudio/Logo_MTK_737e87ca.png"
+            alt="Logo Manufacture des Tabacs de Kairouan (MTK)"
+            className="w-12 h-12 object-contain"
+          />
+          <p className="text-xs font-semibold text-slate-700">
+            Initialisation de la session sécurisée MTK...
+          </p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!firebaseUser) {
+    return (
+      <div className="min-h-screen bg-slate-100 flex items-center justify-center p-6">
+        <div className="bg-white border border-slate-200 rounded-2xl p-8 shadow-sm max-w-md w-full space-y-6">
+          <div className="flex items-center gap-3.5 pb-5 border-b border-slate-100">
+            <div className="w-12 h-12 rounded-xl bg-slate-50 border border-slate-200 flex items-center justify-center p-1.5 shrink-0">
+              <img
+                src="/assets/aistudio/Logo_MTK_737e87ca.png"
+                alt="Logo Manufacture des Tabacs de Kairouan (MTK)"
+                className="w-full h-full object-contain"
+              />
+            </div>
+            <div>
+              <h1 className="text-base font-bold text-slate-900 tracking-tight">
+                MTK International Payments
+              </h1>
+              <p className="text-xs text-slate-500">
+                Manufacture des Tabacs de Kairouan · Direction Financière & Comptable
+              </p>
+            </div>
+          </div>
+
+          <div className="space-y-2">
+            <div className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-blue-800 bg-blue-50 px-2.5 py-1 rounded border border-blue-200">
+              <ShieldCheck className="w-3.5 h-3.5" />
+              Accès DFC Authentifié
+            </div>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Connectez-vous avec votre compte Google professionnel pour accéder aux factures fournisseurs, ordres de paiement internationaux et consultations de change.
+            </p>
+          </div>
+
+          {authError && (
+            <div className="p-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-800 text-xs flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 text-rose-600 shrink-0 mt-0.5" />
+              <span>{authError}</span>
+            </div>
+          )}
+
+          <button
+            type="button"
+            onClick={signInWithGoogle}
+            className="w-full inline-flex items-center justify-center gap-2.5 px-4 py-2.5 bg-blue-700 hover:bg-blue-800 text-white text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
+          >
+            <LogIn className="w-4 h-4" />
+            <span>Se connecter avec Google</span>
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex h-screen bg-slate-100 overflow-hidden text-slate-900 font-sans">
+    <div className="flex h-screen bg-slate-100 overflow-hidden text-slate-900 font-sans print:block print:h-auto print:bg-white print:overflow-visible">
       {/* Sidebar Navigation */}
       <Sidebar
         activeView={sidebarActiveView}
@@ -414,7 +629,13 @@ export default function App() {
       />
 
       {/* Main Content Area */}
-      <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
+      <div
+        className={`flex-1 flex flex-col min-w-0 overflow-hidden ${
+          hasActivePrintModal
+            ? 'print:hidden'
+            : 'print:block print:overflow-visible'
+        }`}
+      >
         {/* Top Header */}
         <Header
           activeView={sidebarActiveView}
@@ -428,6 +649,8 @@ export default function App() {
           showDemoData={showDemoData}
           onToggleDemoData={val => setShowDemoData(val)}
           onResetDemo={handleResetDemo}
+          onExportCsv={handleExportCsv}
+          onSignOut={signOutUser}
           selectedOrderNumber={
             activeView === 'order_detail' && selectedOrder
               ? selectedOrder.orderNumber
@@ -443,6 +666,9 @@ export default function App() {
           {activeView === 'dashboard' && (
             <DashboardView
               stats={stats}
+              invoices={invoices}
+              orders={orders}
+              consultations={consultations}
               filters={filters}
               onFilterChange={setFilters}
               onResetFilters={() =>
@@ -456,11 +682,26 @@ export default function App() {
                 })
               }
               banks={banks}
+              onNavigateToInvoices={() => {
+                setSelectedOrderId(null);
+                setSelectedConsultationId(null);
+                setActiveView('invoices');
+              }}
               onNavigateToOrders={statusFilter => {
                 if (statusFilter) {
                   setFilters(prev => ({ ...prev, status: statusFilter as any }));
                 }
                 setActiveView('orders_list');
+              }}
+              onNavigateToConsultations={() => {
+                setSelectedOrderId(null);
+                setSelectedConsultationId(null);
+                setActiveView('consultations');
+              }}
+              onSelectConsultation={id => {
+                setSelectedOrderId(null);
+                setSelectedConsultationId(id);
+                setActiveView('consultation_detail');
               }}
             />
           )}
@@ -473,6 +714,8 @@ export default function App() {
               suppliers={suppliers}
               currentUser={currentUser}
               onCreateInvoice={handleCreateInvoice}
+              onUpdateInvoice={handleUpdateInvoice}
+              onAttachDefinitiveInvoice={handleAttachDefinitiveInvoice}
               onDeleteInvoice={handleDeleteInvoice}
               onCreateOrderFromInvoice={handleCreateOrderFromInvoice}
               onSelectOrder={id => {
@@ -506,6 +749,7 @@ export default function App() {
               orders={orders}
               banks={banks}
               suppliers={suppliers}
+              currentUser={currentUser}
               filters={filters}
               onFilterChange={setFilters}
               onSelectOrder={id => {
@@ -514,6 +758,8 @@ export default function App() {
               }}
               onPrintOrder={order => setPrintModalOrder(order)}
               onNewOrder={() => setActiveView('new_order')}
+              onUpdateOrder={handleUpdateOrder}
+              onDeleteOrder={handleDeleteOrder}
               onRefresh={loadAllData}
             />
           )}
@@ -522,6 +768,13 @@ export default function App() {
           {activeView === 'order_detail' && selectedOrder && (
             <OrderDetailView
               order={selectedOrder}
+              allOrders={orders}
+              banks={banks}
+              linkedInvoice={invoices.find(
+                inv =>
+                  (selectedOrder.invoiceId && inv.id === selectedOrder.invoiceId) ||
+                  doesOrderBelongToInvoice(selectedOrder, inv)
+              )}
               consultations={consultations}
               currentUser={currentUser}
               onBack={() => {
@@ -542,6 +795,9 @@ export default function App() {
               }}
               onPrintOrder={() => setPrintModalOrder(selectedOrder)}
               onAddDocument={handleAddDocument}
+              onUpdateDeductions={handleUpdateOrderDeductions}
+              onUpdateOrder={handleUpdateOrder}
+              onDeleteOrder={handleDeleteOrder}
             />
           )}
 
@@ -569,6 +825,8 @@ export default function App() {
               onCreateConsultation={handleCreateConsultation}
               onRecordQuotes={handleRecordConsultationQuotes}
               onCancelConsultation={handleCancelConsultation}
+              onUpdateConsultation={handleUpdateConsultation}
+              onDeleteConsultation={handleDeleteConsultation}
               onOpenPdfModal={consultation => setPdfModalConsultation(consultation)}
               onOpenConfirmationModal={(consultation, initialTab) =>
                 setConfirmationModalState({ consultation, initialTab })
@@ -591,6 +849,7 @@ export default function App() {
               orders={orders}
               consultations={consultations}
               banks={banks}
+              currentUser={currentUser}
               onBack={() => {
                 setSelectedConsultationId(null);
                 setActiveView('consultations');
@@ -612,6 +871,8 @@ export default function App() {
               }}
               onRecordQuotes={handleRecordConsultationQuotes}
               onCancelConsultation={handleCancelConsultation}
+              onUpdateConsultation={handleUpdateConsultation}
+              onDeleteConsultation={handleDeleteConsultation}
             />
           )}
 
@@ -657,10 +918,16 @@ export default function App() {
         />
       )}
 
-      {/* Official Print Modal */}
+      {/* Official Print Modal (Demi-feuille A4) */}
       {printModalOrder && (
         <PrintOfficialOrderModal
           order={printModalOrder}
+          linkedInvoice={invoices.find(
+            inv =>
+              (printModalOrder.invoiceId && inv.id === printModalOrder.invoiceId) ||
+              doesOrderBelongToInvoice(printModalOrder, inv)
+          )}
+          allOrders={orders}
           onClose={() => setPrintModalOrder(null)}
         />
       )}

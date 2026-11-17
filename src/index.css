@@ -19,14 +19,33 @@
 }
 
 @media print {
+  @page {
+    size: A4 portrait;
+    margin: 7mm;
+  }
   .no-print {
     display: none !important;
   }
   .print-only {
     display: block !important;
   }
+  .print-half-a4 {
+    width: 100% !important;
+    max-width: 196mm !important;
+    max-height: 138mm !important;
+    overflow: hidden !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+  }
+  html,
   body {
-    background: white !important;
-    color: black !important;
+    background: #ffffff !important;
+    color: #000000 !important;
+    filter: grayscale(100%) contrast(105%);
+  }
+  * {
+    color: #000000 !important;
+    border-color: #222222 !important;
+    box-shadow: none !important;
   }
 }

@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
-import { History, Search, ShieldCheck, Download, Filter } from 'lucide-react';
+import { History, Search, ShieldCheck, Download, Filter, Printer } from 'lucide-react';
 import { AuditLog } from '../types/payment';
+import { downloadTablePdf } from '../utils/tablePdf';
 
 interface AuditLogsViewProps {
   logs: AuditLog[];
@@ -46,6 +47,34 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ logs }) => {
     link.click();
   };
 
+  const printAuditPdf = () => {
+    downloadTablePdf({
+      title: "Journal d'Audit & Historique des Opérations",
+      subtitle: [
+        selectedEntity !== 'ALL' ? `Entité : ${selectedEntity}` : 'Toutes les entités',
+        search ? `Recherche : "${search}"` : null,
+      ]
+        .filter(Boolean)
+        .join(' · '),
+      filename: `MTK_Journal_Audit_${new Date().toISOString().split('T')[0]}.pdf`,
+      orientation: 'landscape',
+      columns: [
+        { header: 'Date & Heure', widthRatio: 1.1 },
+        { header: 'Référence', widthRatio: 1.0 },
+        { header: 'Action Réalisée', widthRatio: 1.1 },
+        { header: 'Utilisateur Responsable', widthRatio: 1.3 },
+        { header: "Détails de l'opération", widthRatio: 2.5 },
+      ],
+      rows: filteredLogs.map(log => [
+        new Date(log.timestamp).toLocaleString('fr-FR'),
+        log.entityRef,
+        log.action,
+        `${log.userName} (${log.userRole})`,
+        log.details,
+      ]),
+    });
+  };
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -62,13 +91,24 @@ export const AuditLogsView: React.FC<AuditLogsViewProps> = ({ logs }) => {
           </p>
         </div>
 
-        <button
-          onClick={exportLogsCsv}
-          className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-2xs"
-        >
-          <Download className="w-3.5 h-3.5 text-slate-500" />
-          <span>Exporter le journal (.CSV)</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={printAuditPdf}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 hover:text-blue-700 transition-colors shadow-2xs"
+          >
+            <Printer className="w-3.5 h-3.5 text-slate-500" />
+            <span>Imprimer tableau PDF</span>
+          </button>
+
+          <button
+            onClick={exportLogsCsv}
+            className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-semibold text-slate-700 bg-white border border-slate-300 rounded-lg hover:bg-slate-50 transition-colors shadow-2xs"
+          >
+            <Download className="w-3.5 h-3.5 text-slate-500" />
+            <span>Exporter le journal (.CSV)</span>
+          </button>
+        </div>
       </div>
 
       {/* Filter and Search Bar */}

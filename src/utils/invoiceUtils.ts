@@ -1,12 +1,391 @@
-import { Invoice, InvoicePaymentStatus, PaymentOrder } from '../types/payment';
+import {
+  Invoice,
+  InvoiceDocumentBasis,
+  InvoicePaymentStatus,
+  OrderDeduction,
+  OrderDeductionCategory,
+  OrderTransferType,
+  PaymentOrder,
+} from '../types/payment';
+
+export const DEDUCTION_CATEGORY_META: Record<
+  OrderDeductionCategory,
+  { label: string; shortLabel: string; placeholderRef: string }
+> = {
+  FRAIS_ENREGISTREMENT: {
+    label: "Frais d'enregistrement",
+    shortLabel: 'Enregistrement',
+    placeholderRef: 'Ex : Quittance Enreg. N° ...',
+  },
+  RETENUE_SOURCE: {
+    label: 'Retenue à la source (RAS)',
+    shortLabel: 'Retenue RAS',
+    placeholderRef: 'Ex : Certificat RAS N° ...',
+  },
+  PENALITE_RETARD: {
+    label: 'Pénalité de retard / Non-conformité',
+    shortLabel: 'Pénalité',
+    placeholderRef: 'Ex : PV Pénalité N° ...',
+  },
+  AVOIR_REMISE: {
+    label: 'Avoir / Rabais / Escompte',
+    shortLabel: 'Avoir / Remise',
+    placeholderRef: 'Ex : Note de crédit / Avoir N° ...',
+  },
+  FRAIS_BANCAIRES: {
+    label: 'Frais bancaires à charge fournisseur',
+    shortLabel: 'Frais bancaires',
+    placeholderRef: 'Ex : Avis frais N° ...',
+  },
+  DROITS_TIMBRE: {
+    label: 'Droits de timbre / Taxes',
+    shortLabel: 'Timbre / Taxes',
+    placeholderRef: 'Ex : Bordereau timbre N° ...',
+  },
+  AUTRE_DEDUCTION: {
+    label: 'Autre déduction',
+    shortLabel: 'Autre déduction',
+    placeholderRef: 'Ex : Référence justificative',
+  },
+};
 
 export interface InvoicePaymentSummary {
   linkedOrders: PaymentOrder[];
-  allocatedAmount: number;
+  allocatedAmount: number; // Montant brut imputé sur la facture (net + déductions)
+  netOrderedAmount: number; // Somme des montants nets à transférer
+  deductionsTotal: number; // Somme des déductions appliquées
   executedAmount: number;
   remainingAmount: number;
   progressPercent: number;
   paymentStatus: InvoicePaymentStatus;
+}
+
+export function getInvoiceProformaRef(
+  invoice?: Pick<Invoice, 'proformaNumber' | 'proformaDate'> | null
+): { number: string; date?: string } | null {
+  const num = (invoice?.proformaNumber || '').trim();
+  if (!num) return null;
+  return {
+    number: num,
+    date: (invoice?.proformaDate || '').trim() || undefined,
+  };
+}
+
+export function getInvoiceDefinitiveRef(
+  invoice?: Pick<
+    Invoice,
+    'invoiceNumber' | 'invoiceDate' | 'proformaNumber' | 'definitiveInvoiceNumber' | 'definitiveInvoiceDate'
+  > | null
+): { number: string; date?: string } | null {
+  if (!invoice) return null;
+  const defNum = (invoice.definitiveInvoiceNumber || '').trim();
+  if (defNum) {
+    return {
+      number: defNum,
+      date: (invoice.definitiveInvoiceDate || invoice.invoiceDate || '').trim() || undefined,
+    };
+  }
+  // Legacy or standard invoice created without a Proforma-first split
+  if (!(invoice.proformaNumber || '').trim()) {
+    const num = (invoice.invoiceNumber || '').trim();
+    if (!num) return null;
+    return {
+      number: num,
+      date: (invoice.invoiceDate || '').trim() || undefined,
+    };
+  }
+  return null;
+}
+
+export function getInvoiceAllReferenceNumbers(
+  invoice?: Pick<Invoice, 'invoiceNumber' | 'proformaNumber' | 'definitiveInvoiceNumber'> | null
+): string[] {
+  if (!invoice) return [];
+  const refs = [
+    invoice.invoiceNumber,
+    invoice.proformaNumber,
+    invoice.definitiveInvoiceNumber,
+  ]
+    .map(v => (v || '').trim())
+    .filter(Boolean);
+  return Array.from(new Set(refs));
+}
+
+export function findReferenceConflict(
+  candidateRefs: string[],
+  existingInvoices: Invoice[],
+  excludeInvoiceId?: string
+): { conflictRef: string; existingInvoice: Invoice } | null {
+  const normalizedCandidates = candidateRefs
+    .map(r => r.trim())
+    .filter(Boolean);
+  if (normalizedCandidates.length === 0) return null;
+
+  for (const existing of existingInvoices) {
+    if (excludeInvoiceId && existing.id === excludeInvoiceId) continue;
+    const existingRefs = getInvoiceAllReferenceNumbers(existing).map(r => r.toLowerCase());
+    for (const candidate of normalizedCandidates) {
+      if (existingRefs.includes(candidate.toLowerCase())) {
+        return { conflictRef: candidate, existingInvoice: existing };
+      }
+    }
+  }
+  return null;
+}
+
+export function getSuggestedNextTranche(
+  invoice: Invoice,
+  summary: InvoicePaymentSummary
+): {
+  isMixedScheme: boolean;
+  transferType: OrderTransferType;
+  documentBasis: InvoiceDocumentBasis;
+  paymentMode: 'FULL' | 'PARTIAL';
+  suggestedGrossAmount: number;
+  label: string;
+} {
+  const profRef = getInvoiceProformaRef(invoice);
+  const defRef = getInvoiceDefinitiveRef(invoice);
+  const isMixedScheme = invoice.paymentScheme === '50_LC_50_VIREMENT';
+
+  if (isMixedScheme) {
+    if (summary.linkedOrders.length === 0) {
+      const halfAmount = Number((invoice.totalAmount / 2).toFixed(2));
+      const suggested = Math.min(summary.remainingAmount, halfAmount);
+      return {
+        isMixedScheme: true,
+        transferType: 'LC',
+        documentBasis: profRef ? 'PROFORMA' : 'FACTURE_DEFINITIVE',
+        paymentMode: suggested < summary.remainingAmount - 0.005 ? 'PARTIAL' : 'FULL',
+        suggestedGrossAmount: suggested,
+        label: 'Tranche 1/2 : 50 % LC (sur Proforma)',
+      };
+    }
+    return {
+      isMixedScheme: true,
+      transferType: 'VIREMENT',
+      documentBasis: 'FACTURE_DEFINITIVE',
+      paymentMode: 'FULL',
+      suggestedGrossAmount: summary.remainingAmount,
+      label: 'Tranche 2/2 : Solde Virement (sur Facture Définitive)',
+    };
+  }
+
+  return {
+    isMixedScheme: false,
+    transferType: 'VIREMENT',
+    documentBasis: profRef && !defRef ? 'PROFORMA' : 'FACTURE_DEFINITIVE',
+    paymentMode: 'FULL',
+    suggestedGrossAmount: summary.remainingAmount,
+    label: 'Règlement du solde disponible',
+  };
+}
+
+export function resolveOrderDocumentSnapshot(params: {
+  invoice?: Invoice;
+  documentBasis?: InvoiceDocumentBasis;
+  explicitInvoiceNumber?: string;
+  explicitInvoiceDate?: string;
+  inlineDefinitiveNumber?: string;
+  inlineDefinitiveDate?: string;
+  existingInvoices?: Invoice[];
+}): {
+  valid: boolean;
+  error?: string;
+  documentBasis: InvoiceDocumentBasis;
+  invoiceNumber: string;
+  invoiceDate: string;
+  proformaNumber?: string;
+  proformaDate?: string;
+  invoiceDefinitiveAttach?: {
+    definitiveInvoiceNumber: string;
+    definitiveInvoiceDate: string;
+  };
+} {
+  const {
+    invoice,
+    documentBasis,
+    explicitInvoiceNumber,
+    explicitInvoiceDate,
+    inlineDefinitiveNumber,
+    inlineDefinitiveDate,
+    existingInvoices = [],
+  } = params;
+  const today = new Date().toISOString().split('T')[0];
+
+  if (!invoice) {
+    const basis: InvoiceDocumentBasis = documentBasis || 'FACTURE_DEFINITIVE';
+    const invNum = (explicitInvoiceNumber || '').trim();
+    const invDate = (explicitInvoiceDate || '').trim() || today;
+    return {
+      valid: true,
+      documentBasis: basis,
+      invoiceNumber: invNum,
+      invoiceDate: invDate,
+      proformaNumber: basis === 'PROFORMA' ? invNum || undefined : undefined,
+      proformaDate: basis === 'PROFORMA' ? invDate : undefined,
+    };
+  }
+
+  const profRef = getInvoiceProformaRef(invoice);
+  const defRef = getInvoiceDefinitiveRef(invoice);
+  const resolvedBasis: InvoiceDocumentBasis =
+    documentBasis ?? (profRef && !defRef ? 'PROFORMA' : 'FACTURE_DEFINITIVE');
+
+  if (resolvedBasis === 'PROFORMA') {
+    const profNum = profRef?.number || (explicitInvoiceNumber || '').trim();
+    if (!profNum) {
+      return {
+        valid: false,
+        error: 'Ce dossier ne comporte pas encore de référence Proforma.',
+        documentBasis: 'PROFORMA',
+        invoiceNumber: '',
+        invoiceDate: today,
+      };
+    }
+    const profDate = profRef?.date || (explicitInvoiceDate || '').trim() || invoice.invoiceDate;
+    return {
+      valid: true,
+      documentBasis: 'PROFORMA',
+      invoiceNumber: profNum,
+      invoiceDate: profDate,
+      proformaNumber: profNum,
+      proformaDate: profDate,
+    };
+  }
+
+  // resolvedBasis === 'FACTURE_DEFINITIVE'
+  if (defRef?.number) {
+    return {
+      valid: true,
+      documentBasis: 'FACTURE_DEFINITIVE',
+      invoiceNumber: defRef.number,
+      invoiceDate: defRef.date || invoice.invoiceDate,
+      proformaNumber: profRef?.number,
+      proformaDate: profRef?.date,
+    };
+  }
+
+  // No definitive invoice registered on the dossier yet -> check inline input
+  const trimmedInline = (inlineDefinitiveNumber || '').trim();
+  const trimmedExplicit = (explicitInvoiceNumber || '').trim();
+  const candidateDefNum =
+    trimmedInline ||
+    (trimmedExplicit &&
+    trimmedExplicit.toLowerCase() !== (profRef?.number || '').toLowerCase()
+      ? trimmedExplicit
+      : '');
+
+  if (!candidateDefNum) {
+    return {
+      valid: false,
+      error:
+        'Veuillez saisir le N° de la Facture Définitive reçue pour émettre cet ordre de paiement.',
+      documentBasis: 'FACTURE_DEFINITIVE',
+      invoiceNumber: '',
+      invoiceDate: today,
+      proformaNumber: profRef?.number,
+      proformaDate: profRef?.date,
+    };
+  }
+
+  const conflict = findReferenceConflict([candidateDefNum], existingInvoices, invoice.id);
+  if (conflict) {
+    return {
+      valid: false,
+      error: `Une autre fiche facture porte déjà la référence ${conflict.conflictRef}.`,
+      documentBasis: 'FACTURE_DEFINITIVE',
+      invoiceNumber: candidateDefNum,
+      invoiceDate: today,
+      proformaNumber: profRef?.number,
+      proformaDate: profRef?.date,
+    };
+  }
+
+  const candidateDefDate =
+    (inlineDefinitiveDate || '').trim() ||
+    (explicitInvoiceDate || '').trim() ||
+    today;
+
+  return {
+    valid: true,
+    documentBasis: 'FACTURE_DEFINITIVE',
+    invoiceNumber: candidateDefNum,
+    invoiceDate: candidateDefDate,
+    proformaNumber: profRef?.number,
+    proformaDate: profRef?.date,
+    invoiceDefinitiveAttach: {
+      definitiveInvoiceNumber: candidateDefNum,
+      definitiveInvoiceDate: candidateDefDate,
+    },
+  };
+}
+
+export function normalizeOrderDeductions(
+  deductions?: Array<Partial<OrderDeduction>>
+): { items: OrderDeduction[]; total: number; error?: string } {
+  if (!Array.isArray(deductions) || deductions.length === 0) {
+    return { items: [], total: 0 };
+  }
+
+  const items: OrderDeduction[] = [];
+  for (let i = 0; i < deductions.length; i += 1) {
+    const raw = deductions[i];
+    if (!raw) continue;
+    const amt = Number(raw.amount);
+    if (!Number.isFinite(amt) || amt < 0) {
+      return {
+        items: [],
+        total: 0,
+        error: 'Le montant de chaque déduction ou frais doit être un nombre positif.',
+      };
+    }
+    const rounded = Number(amt.toFixed(2));
+    if (rounded <= 0) {
+      continue;
+    }
+    const category: OrderDeductionCategory =
+      raw.category && raw.category in DEDUCTION_CATEGORY_META
+        ? raw.category
+        : 'AUTRE_DEDUCTION';
+    const label = (raw.label || '').trim() || DEDUCTION_CATEGORY_META[category].label;
+    const reference = (raw.reference || '').trim() || undefined;
+    items.push({
+      id: raw.id || `ded_${Date.now()}_${i}`,
+      category,
+      label,
+      amount: rounded,
+      reference,
+    });
+  }
+
+  const total = Number(items.reduce((sum, d) => sum + d.amount, 0).toFixed(2));
+  return { items, total };
+}
+
+export function getOrderDeductionsTotal(
+  order: Pick<PaymentOrder, 'deductions' | 'deductionsTotal'>
+): number {
+  if (Array.isArray(order.deductions) && order.deductions.length > 0) {
+    return Number(
+      order.deductions.reduce((sum, d) => sum + (Number(d.amount) || 0), 0).toFixed(2)
+    );
+  }
+  return Number((Number(order.deductionsTotal) || 0).toFixed(2));
+}
+
+export function getOrderInvoiceGrossAmount(
+  order: Pick<PaymentOrder, 'amount' | 'grossAmount' | 'deductions' | 'deductionsTotal'>
+): number {
+  const deductionsTotal = getOrderDeductionsTotal(order);
+  if (
+    order.grossAmount !== undefined &&
+    order.grossAmount !== null &&
+    Number.isFinite(Number(order.grossAmount))
+  ) {
+    return Number(Number(order.grossAmount).toFixed(2));
+  }
+  return Number(((Number(order.amount) || 0) + deductionsTotal).toFixed(2));
 }
 
 export function doesOrderBelongToInvoice(order: PaymentOrder, invoice: Invoice): boolean {
@@ -14,8 +393,9 @@ export function doesOrderBelongToInvoice(order: PaymentOrder, invoice: Invoice):
     return order.invoiceId === invoice.id;
   }
   const orderInv = (order.invoiceNumber || '').trim().toLowerCase();
-  const invNum = (invoice.invoiceNumber || '').trim().toLowerCase();
-  return Boolean(orderInv && invNum && orderInv === invNum);
+  if (!orderInv) return false;
+  const refs = getInvoiceAllReferenceNumbers(invoice).map(r => r.toLowerCase());
+  return refs.includes(orderInv);
 }
 
 export function computeInvoicePaymentSummary(
@@ -27,7 +407,13 @@ export function computeInvoicePaymentSummary(
   );
 
   const allocatedAmount = Number(
+    linkedOrders.reduce((sum, o) => sum + getOrderInvoiceGrossAmount(o), 0).toFixed(2)
+  );
+  const netOrderedAmount = Number(
     linkedOrders.reduce((sum, o) => sum + (Number(o.amount) || 0), 0).toFixed(2)
+  );
+  const deductionsTotal = Number(
+    linkedOrders.reduce((sum, o) => sum + getOrderDeductionsTotal(o), 0).toFixed(2)
   );
   const executedAmount = Number(
     linkedOrders
@@ -49,6 +435,8 @@ export function computeInvoicePaymentSummary(
   return {
     linkedOrders,
     allocatedAmount,
+    netOrderedAmount,
+    deductionsTotal,
     executedAmount,
     remainingAmount,
     progressPercent,
@@ -59,24 +447,76 @@ export function computeInvoicePaymentSummary(
 export function validateOrderAgainstInvoice(
   invoice: Invoice,
   orders: PaymentOrder[],
-  requestedAmount: number,
-  requestedCurrency: string
-): { valid: boolean; error?: string; summary: InvoicePaymentSummary } {
+  requestedNetAmount: number,
+  requestedCurrency: string,
+  deductions?: Array<Partial<OrderDeduction>>,
+  explicitGrossAmount?: number
+): {
+  valid: boolean;
+  error?: string;
+  summary: InvoicePaymentSummary;
+  grossAmount: number;
+  deductionsTotal: number;
+  normalizedDeductions: OrderDeduction[];
+} {
   const summary = computeInvoicePaymentSummary(invoice, orders);
+  const dedCheck = normalizeOrderDeductions(deductions);
+
+  if (dedCheck.error) {
+    return {
+      valid: false,
+      error: dedCheck.error,
+      summary,
+      grossAmount: Number(requestedNetAmount) || 0,
+      deductionsTotal: 0,
+      normalizedDeductions: [],
+    };
+  }
+
+  const netRounded = Number((Number(requestedNetAmount) || 0).toFixed(2));
+  const computedGross = Number((netRounded + dedCheck.total).toFixed(2));
+  const grossAmount =
+    explicitGrossAmount !== undefined && Number.isFinite(Number(explicitGrossAmount))
+      ? Number(Number(explicitGrossAmount).toFixed(2))
+      : computedGross;
 
   if (requestedCurrency !== invoice.currency) {
     return {
       valid: false,
       error: `La devise de l’ordre (${requestedCurrency}) doit correspondre à la devise de la facture (${invoice.currency}).`,
       summary,
+      grossAmount,
+      deductionsTotal: dedCheck.total,
+      normalizedDeductions: dedCheck.items,
     };
   }
 
-  if (!Number.isFinite(requestedAmount) || requestedAmount <= 0) {
+  if (
+    explicitGrossAmount !== undefined &&
+    Number.isFinite(Number(explicitGrossAmount)) &&
+    Math.abs(grossAmount - computedGross) > 0.02
+  ) {
     return {
       valid: false,
-      error: 'Le montant à payer sur la facture doit être strictement supérieur à 0.',
+      error: `Incohérence entre le montant brut (${grossAmount.toFixed(2)}), les déductions (${dedCheck.total.toFixed(2)}) et le montant net (${netRounded.toFixed(2)}).`,
       summary,
+      grossAmount,
+      deductionsTotal: dedCheck.total,
+      normalizedDeductions: dedCheck.items,
+    };
+  }
+
+  if (!Number.isFinite(requestedNetAmount) || requestedNetAmount <= 0) {
+    return {
+      valid: false,
+      error:
+        dedCheck.total > 0
+          ? `Le montant net à transférer après déductions (${dedCheck.total.toFixed(2)} ${invoice.currency}) doit être strictement supérieur à 0.`
+          : 'Le montant à payer sur la facture doit être strictement supérieur à 0.',
+      summary,
+      grossAmount,
+      deductionsTotal: dedCheck.total,
+      normalizedDeductions: dedCheck.items,
     };
   }
 
@@ -85,18 +525,33 @@ export function validateOrderAgainstInvoice(
       valid: false,
       error: `La facture ${invoice.invoiceNumber} est déjà intégralement ordonnancée (${invoice.totalAmount} ${invoice.currency}).`,
       summary,
+      grossAmount,
+      deductionsTotal: dedCheck.total,
+      normalizedDeductions: dedCheck.items,
     };
   }
 
-  if (requestedAmount > summary.remainingAmount + 0.005) {
+  if (grossAmount > summary.remainingAmount + 0.005) {
     return {
       valid: false,
-      error: `Le montant saisi (${requestedAmount.toFixed(2)} ${invoice.currency}) dépasse le solde restant de la facture (${summary.remainingAmount.toFixed(2)} ${invoice.currency}).`,
+      error:
+        dedCheck.total > 0
+          ? `Le montant brut imputé (${grossAmount.toFixed(2)} ${invoice.currency} = net ${netRounded.toFixed(2)} + déductions ${dedCheck.total.toFixed(2)}) dépasse le solde restant de la facture (${summary.remainingAmount.toFixed(2)} ${invoice.currency}).`
+          : `Le montant saisi (${requestedNetAmount.toFixed(2)} ${invoice.currency}) dépasse le solde restant de la facture (${summary.remainingAmount.toFixed(2)} ${invoice.currency}).`,
       summary,
+      grossAmount,
+      deductionsTotal: dedCheck.total,
+      normalizedDeductions: dedCheck.items,
     };
   }
 
-  return { valid: true, summary };
+  return {
+    valid: true,
+    summary,
+    grossAmount,
+    deductionsTotal: dedCheck.total,
+    normalizedDeductions: dedCheck.items,
+  };
 }
 
 export function getAvailableInvoicesForOrder(
@@ -110,3 +565,162 @@ export function getAvailableInvoicesForOrder(
     }))
     .filter(item => item.summary.remainingAmount > 0.005);
 }
+
+export function canEditOrderDeductions(
+  order: Pick<PaymentOrder, 'status' | 'deposit' | 'exchangeTransaction'>
+): { allowed: boolean; reason?: string } {
+  if (order.status === 'ANNULE') {
+    return {
+      allowed: false,
+      reason: "Modification des déductions impossible : l'ordre a été annulé.",
+    };
+  }
+  if (order.status === 'EXECUTE') {
+    return {
+      allowed: false,
+      reason: "Modification des déductions impossible : le virement a déjà été exécuté.",
+    };
+  }
+  if (
+    order.status === 'DEPOSE_BANQUE' ||
+    order.status === 'EN_ATTENTE_ACHAT_DEVISE' ||
+    Boolean(order.deposit)
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "Modification des déductions impossible : l'ordre a déjà été déposé à la banque.",
+    };
+  }
+  const exStatus = order.exchangeTransaction?.status;
+  if (
+    order.exchangeTransaction?.consultationId &&
+    (exStatus === 'CONSULTATION_EN_COURS' || exStatus === 'NEGOCIE' || exStatus === 'VALIDE')
+  ) {
+    return {
+      allowed: false,
+      reason:
+        "Modification des déductions impossible : l'ordre est déjà engagé dans une consultation de change.",
+    };
+  }
+  if (
+    order.status === 'SAISI' ||
+    order.status === 'TRANSMIS_SIGNATURE' ||
+    order.status === 'SIGNE'
+  ) {
+    return { allowed: true };
+  }
+  return {
+    allowed: false,
+    reason: `Modification des déductions impossible pour le statut ${order.status}.`,
+  };
+}
+
+export function validateExistingOrderDeductionsUpdate(params: {
+  order: PaymentOrder;
+  invoice?: Invoice;
+  allOrders: PaymentOrder[];
+  deductions?: Array<Partial<OrderDeduction>>;
+  grossAmount?: number;
+}): {
+  valid: boolean;
+  error?: string;
+  grossAmount: number;
+  deductionsTotal: number;
+  netAmount: number;
+  normalizedDeductions: OrderDeduction[];
+  maxAllowedGross?: number;
+} {
+  const { order, invoice, allOrders, deductions, grossAmount } = params;
+  const currentGross = getOrderInvoiceGrossAmount(order);
+
+  const editCheck = canEditOrderDeductions(order);
+  if (!editCheck.allowed) {
+    return {
+      valid: false,
+      error: editCheck.reason,
+      grossAmount: currentGross,
+      deductionsTotal: getOrderDeductionsTotal(order),
+      netAmount: Number(order.amount) || 0,
+      normalizedDeductions: Array.isArray(order.deductions) ? order.deductions : [],
+    };
+  }
+
+  const dedCheck = normalizeOrderDeductions(deductions);
+  if (dedCheck.error) {
+    return {
+      valid: false,
+      error: dedCheck.error,
+      grossAmount: currentGross,
+      deductionsTotal: 0,
+      netAmount: currentGross,
+      normalizedDeductions: [],
+    };
+  }
+
+  let targetGross = currentGross;
+  if (grossAmount !== undefined && grossAmount !== null) {
+    const parsedGross = Number(grossAmount);
+    if (!Number.isFinite(parsedGross) || parsedGross <= 0) {
+      return {
+        valid: false,
+        error: "Le montant brut de l'ordre doit être strictement supérieur à 0.",
+        grossAmount: currentGross,
+        deductionsTotal: dedCheck.total,
+        netAmount: 0,
+        normalizedDeductions: dedCheck.items,
+      };
+    }
+    targetGross = Number(parsedGross.toFixed(2));
+  }
+
+  const netAmount = Number((targetGross - dedCheck.total).toFixed(2));
+  if (!Number.isFinite(netAmount) || netAmount <= 0) {
+    return {
+      valid: false,
+      error: `Le total des déductions (${dedCheck.total.toFixed(2)} ${order.currency}) doit être inférieur au montant brut (${targetGross.toFixed(2)} ${order.currency}) pour conserver un net à transférer positif.`,
+      grossAmount: targetGross,
+      deductionsTotal: dedCheck.total,
+      netAmount,
+      normalizedDeductions: dedCheck.items,
+    };
+  }
+
+  let maxAllowedGross: number | undefined;
+  if (invoice) {
+    if (order.currency !== invoice.currency) {
+      return {
+        valid: false,
+        error: `La devise de l’ordre (${order.currency}) doit correspondre à celle de la facture (${invoice.currency}).`,
+        grossAmount: targetGross,
+        deductionsTotal: dedCheck.total,
+        netAmount,
+        normalizedDeductions: dedCheck.items,
+      };
+    }
+    const otherOrders = allOrders.filter(o => o.id !== order.id);
+    const summaryWithoutCurrent = computeInvoicePaymentSummary(invoice, otherOrders);
+    maxAllowedGross = summaryWithoutCurrent.remainingAmount;
+    if (targetGross > maxAllowedGross + 0.005) {
+      return {
+        valid: false,
+        error: `Le montant brut imputé (${targetGross.toFixed(2)} ${invoice.currency}) dépasse le solde disponible de la facture ${invoice.invoiceNumber} (${maxAllowedGross.toFixed(2)} ${invoice.currency}).`,
+        grossAmount: targetGross,
+        deductionsTotal: dedCheck.total,
+        netAmount,
+        normalizedDeductions: dedCheck.items,
+        maxAllowedGross,
+      };
+    }
+  }
+
+  return {
+    valid: true,
+    grossAmount: targetGross,
+    deductionsTotal: dedCheck.total,
+    netAmount,
+    normalizedDeductions: dedCheck.items,
+    maxAllowedGross,
+  };
+}
+

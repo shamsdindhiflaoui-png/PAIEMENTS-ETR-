@@ -20,6 +20,7 @@ import {
   formatContactOrderTypesTag,
   normalizeBankConfirmationContacts,
 } from '../utils/purchaseConfirmationPdf';
+import { downloadTablePdf } from '../utils/tablePdf';
 
 interface SettingsViewProps {
   suppliers: Supplier[];
@@ -375,17 +376,50 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* TAB 1: Fournisseurs */}
         {activeTab === 'suppliers' && (
           <div className="space-y-4">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
                 Répertoire des Fournisseurs Étrangers Agréés MTK
               </h3>
-              <button
-                onClick={() => setShowSupplierModal(true)}
-                className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors shadow-2xs"
-              >
-                <Plus className="w-3.5 h-3.5" />
-                <span>Nouveau Fournisseur</span>
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() =>
+                    downloadTablePdf({
+                      title: 'Répertoire des Fournisseurs Étrangers Agréés MTK',
+                      subtitle: `${suppliers.length} fournisseur(s) référencé(s)`,
+                      filename: `Fournisseurs_MTK_${new Date().toISOString().split('T')[0]}.pdf`,
+                      orientation: 'landscape',
+                      columns: [
+                        { header: 'Code', widthRatio: 0.8 },
+                        { header: 'Raison Sociale', widthRatio: 1.8 },
+                        { header: 'Pays', widthRatio: 0.9 },
+                        { header: 'Banque Étrangère', widthRatio: 1.6 },
+                        { header: 'IBAN / Compte', widthRatio: 1.8 },
+                        { header: 'SWIFT', widthRatio: 0.9 },
+                      ],
+                      rows: suppliers.map(s => [
+                        s.code,
+                        s.name,
+                        s.country,
+                        s.bankName,
+                        s.iban,
+                        s.swift,
+                      ]),
+                    })
+                  }
+                  className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors shadow-2xs"
+                >
+                  <Printer className="w-3.5 h-3.5 text-slate-500" />
+                  <span>Imprimer tableau PDF</span>
+                </button>
+                <button
+                  onClick={() => setShowSupplierModal(true)}
+                  className="inline-flex items-center gap-1 px-3 py-1.5 text-xs font-semibold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors shadow-2xs"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                  <span>Nouveau Fournisseur</span>
+                </button>
+              </div>
             </div>
 
             <div className="border border-slate-200 rounded-lg overflow-hidden">
@@ -548,9 +582,44 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
         {/* TAB 3: Profils Utilisateurs & Matrice des Droits */}
         {activeTab === 'users' && (
           <div className="space-y-4">
-            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Matrice des Droits d'Accès et Habilitations Métier
-            </h3>
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                Matrice des Droits d'Accès et Habilitations Métier
+              </h3>
+              <button
+                type="button"
+                onClick={() =>
+                  downloadTablePdf({
+                    title: "Matrice des Droits d'Accès & Habilitations Métier MTK",
+                    subtitle: `${users.length} profil(s) configuré(s)`,
+                    filename: `Habilitations_MTK_${new Date().toISOString().split('T')[0]}.pdf`,
+                    orientation: 'landscape',
+                    columns: [
+                      { header: 'Utilisateur', widthRatio: 1.2 },
+                      { header: 'Direction / Service', widthRatio: 1.5 },
+                      { header: 'Profil Système', widthRatio: 1.1 },
+                      { header: 'Habilitations Autorisées', widthRatio: 2.5 },
+                    ],
+                    rows: users.map(u => [
+                      u.name,
+                      u.department,
+                      u.role,
+                      u.role === 'ADMINISTRATEUR'
+                        ? 'Accès total, gestion des utilisateurs, des paramètres et de toutes les opérations.'
+                        : u.role === 'CONTROLE_GESTION'
+                        ? 'Consultation des ordres transmis, validation budgétaire, retour pour correction, rejet motivé.'
+                        : u.role === 'RESPONSABLE_FINANCIER'
+                        ? 'Supervision globale, négociation de change, validation de l’exécution et clôture des débits.'
+                        : 'Création d’ordres, saisie des informations, transmission au contrôle, dépôt bancaire.',
+                    ]),
+                  })
+                }
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white border border-slate-300 hover:bg-slate-50 rounded-lg transition-colors shadow-2xs"
+              >
+                <Printer className="w-3.5 h-3.5 text-slate-500" />
+                <span>Imprimer tableau PDF</span>
+              </button>
+            </div>
 
             <div className="border border-slate-200 rounded-lg overflow-hidden">
               <table className="w-full text-xs text-left">

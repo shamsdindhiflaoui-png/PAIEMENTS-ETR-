@@ -309,36 +309,42 @@ export function buildPurchaseConfirmationRecapData(
 }
 
 function drawSectionHeading(doc: jsPDF, title: string, x: number, y: number, width: number): number {
-  doc.setFillColor(15, 23, 42); // Slate-900
-  doc.rect(x, y, width, 6.5, 'F');
-  doc.setTextColor(255, 255, 255);
+  doc.setFillColor(232, 232, 232);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.35);
+  doc.rect(x, y, width, 6.5, 'FD');
+  doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.text(pdfSafeText(title), x + 2.5, y + 4.4);
-  doc.setTextColor(15, 23, 42);
   return y + 6.5;
 }
 
 function drawPageHeader(doc: jsPDF, recap: PurchaseConfirmationRecapData, x: number, width: number): number {
-  // Top Banner
-  doc.setFillColor(244, 246, 200); // MTK Pale Yellow
-  doc.setDrawColor(51, 65, 85);
-  doc.setLineWidth(0.3);
+  // Top Banner — B&W print-optimized
+  doc.setFillColor(255, 255, 255);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.45);
   doc.rect(x, 12, width, 21, 'FD');
 
-  doc.setTextColor(15, 23, 42);
+  doc.setFillColor(0, 0, 0);
+  doc.rect(x, 12, 2.2, 21, 'F');
+
+  doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(11);
-  doc.text('MANUFACTURE DES TABACS DE KAIROUAN (MTK)', x + 4, 18.2);
+  doc.text('MANUFACTURE DES TABACS DE KAIROUAN (MTK)', x + 5, 18.2);
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8);
-  doc.text('Direction Financiere & Comptable (DFC) - Reglements Internationaux', x + 4, 22.8);
-  doc.text('B.P. 106 - 3100 Kairouan | Tel : (77) 281.309 | Email : mtk.tn@mtk.tn', x + 4, 27.2);
+  doc.text('Direction Financiere & Comptable (DFC) - Reglements Internationaux', x + 5, 22.8);
+  doc.text('B.P. 106 - 3100 Kairouan | Tel : (77) 281.309 | Email : mtk.tn@mtk.tn', x + 5, 27.2);
 
-  // Right Reference Box inside banner
-  doc.setFillColor(15, 23, 42);
-  doc.rect(x + width - 54, 14, 50, 17, 'F');
-  doc.setTextColor(255, 255, 255);
+  // Right Reference Box inside banner — clean light tint & black border
+  doc.setFillColor(244, 244, 244);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.35);
+  doc.rect(x + width - 54, 14, 50, 17, 'FD');
+  doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.5);
   doc.text(pdfSafeText(`RECAP CONFIRMATION ${recap.confirmationRef}`), x + width - 29, 19.5, {
@@ -352,7 +358,7 @@ function drawPageHeader(doc: jsPDF, recap: PurchaseConfirmationRecapData, x: num
   });
 
   // Document Main Title
-  doc.setTextColor(15, 23, 42);
+  doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(12);
   doc.text("RECAPITULATIF DE CONFIRMATION D'ACHAT DE DEVISES", x + width / 2, 40, {
@@ -361,9 +367,9 @@ function drawPageHeader(doc: jsPDF, recap: PurchaseConfirmationRecapData, x: num
 
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(8.5);
-  doc.setTextColor(71, 85, 105);
+  doc.setTextColor(45, 45, 45);
   doc.text(pdfSafeText(recap.routingLabel), x + width / 2, 44.8, { align: 'center' });
-  doc.setTextColor(15, 23, 42);
+  doc.setTextColor(0, 0, 0);
 
   return 49;
 }
@@ -423,24 +429,24 @@ export function buildPurchaseConfirmationRecapPdfDocument(
 
   kpis.forEach((kpi, i) => {
     const bx = marginX + i * (boxW + 2);
-    doc.setFillColor(248, 250, 252);
-    doc.setDrawColor(203, 213, 225);
-    doc.setLineWidth(0.25);
+    doc.setFillColor(255, 255, 255);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
     doc.rect(bx, y, boxW, boxH, 'FD');
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.5);
-    doc.setTextColor(100, 116, 139);
+    doc.setTextColor(45, 45, 45);
     doc.text(pdfSafeText(kpi.label), bx + 2.5, y + 4.2);
 
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(9.5);
-    doc.setTextColor(15, 23, 42);
+    doc.setTextColor(0, 0, 0);
     doc.text(pdfSafeText(kpi.value), bx + 2.5, y + 9.8);
 
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.8);
-    doc.setTextColor(71, 85, 105);
+    doc.setTextColor(45, 45, 45);
     doc.text(pdfSafeText(kpi.sub), bx + 2.5, y + 14.0);
   });
 
@@ -469,12 +475,13 @@ export function buildPurchaseConfirmationRecapPdfDocument(
   ];
 
   const drawOrderTableHeader = (startY: number): number => {
-    doc.setFillColor(241, 245, 249);
-    doc.setDrawColor(148, 163, 184);
+    doc.setFillColor(242, 242, 242);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
     doc.rect(marginX, startY, contentWidth, 6.5, 'FD');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.2);
-    doc.setTextColor(30, 41, 59);
+    doc.setTextColor(0, 0, 0);
     let cx = marginX;
     ordHeaders.forEach((h, idx) => {
       const isRight = idx >= 4;
@@ -498,19 +505,20 @@ export function buildPurchaseConfirmationRecapPdfDocument(
       y = drawPageHeader(doc, recap, marginX, contentWidth);
       y = drawOrderTableHeader(y);
     }
-    doc.setFillColor(i % 2 === 1 ? 248 : 255, i % 2 === 1 ? 250 : 255, i % 2 === 1 ? 252 : 255);
-    doc.setDrawColor(203, 213, 225);
+    doc.setFillColor(i % 2 === 1 ? 245 : 255, i % 2 === 1 ? 245 : 255, i % 2 === 1 ? 245 : 255);
+    doc.setDrawColor(110, 110, 110);
+    doc.setLineWidth(0.25);
     doc.rect(marginX, y, contentWidth, 6.5, 'FD');
 
     let cx = marginX;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.2);
-    doc.setTextColor(30, 58, 138);
+    doc.setTextColor(0, 0, 0);
     doc.text(pdfSafeText(row.orderNumber), cx + 1.5, y + 4.3);
     cx += ordCols[0];
 
     doc.setFont('helvetica', 'normal');
-    doc.setTextColor(15, 23, 42);
+    doc.setTextColor(0, 0, 0);
     doc.text(pdfSafeText(truncateText(row.beneficiaryName, 22)), cx + 1.5, y + 4.3);
     cx += ordCols[1];
 
@@ -547,12 +555,13 @@ export function buildPurchaseConfirmationRecapPdfDocument(
   }
 
   // Orders total row
-  doc.setFillColor(226, 232, 240);
-  doc.setDrawColor(100, 116, 139);
+  doc.setFillColor(232, 232, 232);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.35);
   doc.rect(marginX, y, contentWidth, 7, 'FD');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.6);
-  doc.setTextColor(15, 23, 42);
+  doc.setTextColor(0, 0, 0);
   doc.text('TOTAL GENERAL DE LA CONFIRMATION', marginX + 2, y + 4.7);
   const amtRightX = marginX + ordCols[0] + ordCols[1] + ordCols[2] + ordCols[3] + ordCols[4] - 1.5;
   doc.text(
@@ -590,11 +599,13 @@ export function buildPurchaseConfirmationRecapPdfDocument(
       'Décision',
     ];
 
-    doc.setFillColor(241, 245, 249);
-    doc.setDrawColor(148, 163, 184);
+    doc.setFillColor(242, 242, 242);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
     doc.rect(marginX, y, contentWidth, 6.5, 'FD');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.2);
+    doc.setTextColor(0, 0, 0);
     let qx = marginX;
     qHeaders.forEach((h, idx) => {
       const isRight = idx >= 2 && idx <= 4;
@@ -616,17 +627,18 @@ export function buildPurchaseConfirmationRecapPdfDocument(
       }
 
       if (q.isRetained) {
-        doc.setFillColor(236, 253, 245); // emerald-50
+        doc.setFillColor(232, 232, 232);
       } else {
-        doc.setFillColor(i % 2 === 1 ? 248 : 255, i % 2 === 1 ? 250 : 255, i % 2 === 1 ? 252 : 255);
+        doc.setFillColor(i % 2 === 1 ? 245 : 255, i % 2 === 1 ? 245 : 255, i % 2 === 1 ? 245 : 255);
       }
-      doc.setDrawColor(203, 213, 225);
+      doc.setDrawColor(110, 110, 110);
+      doc.setLineWidth(0.25);
       doc.rect(marginX, y, contentWidth, 6.5, 'FD');
 
       let cx = marginX;
       doc.setFont('helvetica', 'bold');
       doc.setFontSize(7.2);
-      doc.setTextColor(15, 23, 42);
+      doc.setTextColor(0, 0, 0);
       doc.text(`#${q.rank}`, cx + 1.5, y + 4.3);
       cx += qCols[0];
 
@@ -662,13 +674,14 @@ export function buildPurchaseConfirmationRecapPdfDocument(
 
       doc.setFont('helvetica', 'bold');
       if (q.isRetained) {
-        doc.setTextColor(4, 120, 87);
-        doc.text('RETENUE', cx + 2, y + 4.3);
+        doc.setTextColor(0, 0, 0);
+        doc.text('[RETENUE]', cx + 2, y + 4.3);
       } else {
-        doc.setTextColor(100, 116, 139);
+        doc.setFont('helvetica', 'normal');
+        doc.setTextColor(45, 45, 45);
         doc.text(pdfSafeText(`+${q.spreadVsLowestRate.toFixed(4)}`), cx + 2, y + 4.3);
       }
-      doc.setTextColor(15, 23, 42);
+      doc.setTextColor(0, 0, 0);
       y += 6.5;
     }
     y += 5;
@@ -687,11 +700,13 @@ export function buildPurchaseConfirmationRecapPdfDocument(
   const lCols = [14, 44, 24, 28, 72]; // sums to 182
   const lHeaders = ['Page', 'Destinataire & Rôle', 'Fax', 'Montant TND', 'Instruction BCT / Règlement'];
 
-  doc.setFillColor(241, 245, 249);
-  doc.setDrawColor(148, 163, 184);
+  doc.setFillColor(242, 242, 242);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.3);
   doc.rect(marginX, y, contentWidth, 6.5, 'FD');
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.2);
+  doc.setTextColor(0, 0, 0);
   let lx = marginX;
   lHeaders.forEach((h, idx) => {
     const isRight = idx === 3;
@@ -711,14 +726,15 @@ export function buildPurchaseConfirmationRecapPdfDocument(
       doc.addPage();
       y = drawPageHeader(doc, recap, marginX, contentWidth);
     }
-    doc.setFillColor(i % 2 === 1 ? 248 : 255, i % 2 === 1 ? 250 : 255, i % 2 === 1 ? 252 : 255);
-    doc.setDrawColor(203, 213, 225);
+    doc.setFillColor(i % 2 === 1 ? 245 : 255, i % 2 === 1 ? 245 : 255, i % 2 === 1 ? 245 : 255);
+    doc.setDrawColor(110, 110, 110);
+    doc.setLineWidth(0.25);
     doc.rect(marginX, y, contentWidth, 7.5, 'FD');
 
     let cx = marginX;
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.2);
-    doc.setTextColor(15, 23, 42);
+    doc.setTextColor(0, 0, 0);
     doc.text(`${lr.pageNumber}/${recap.letterRows.length}`, cx + 1.5, y + 4.8);
     cx += lCols[0];
 
@@ -754,9 +770,11 @@ export function buildPurchaseConfirmationRecapPdfDocument(
   if (recap.notes && recap.notes.trim()) {
     y = ensureSpace(y, 14);
     y += 4;
-    doc.setFillColor(254, 252, 232);
-    doc.setDrawColor(234, 179, 8);
+    doc.setFillColor(248, 248, 248);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
     doc.rect(marginX, y, contentWidth, 10, 'FD');
+    doc.setTextColor(0, 0, 0);
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.2);
     doc.text('Observations de la séance :', marginX + 2.5, y + 4);
@@ -776,14 +794,15 @@ export function buildPurchaseConfirmationRecapPdfDocument(
   ];
   sigTitles.forEach((title, idx) => {
     const sx = marginX + idx * (sigW + 4);
-    doc.setDrawColor(148, 163, 184);
+    doc.setDrawColor(0, 0, 0);
+    doc.setLineWidth(0.3);
     doc.setFillColor(255, 255, 255);
     doc.rect(sx, y, sigW, 22, 'FD');
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(7.5);
-    doc.setTextColor(51, 65, 85);
+    doc.setTextColor(0, 0, 0);
     doc.text(pdfSafeText(title), sx + sigW / 2, y + 5, { align: 'center' });
-    doc.setDrawColor(226, 232, 240);
+    doc.setDrawColor(100, 100, 100);
     doc.line(sx + 6, y + 17, sx + sigW - 6, y + 17);
   });
 
@@ -793,7 +812,7 @@ export function buildPurchaseConfirmationRecapPdfDocument(
     doc.setPage(p);
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.2);
-    doc.setTextColor(100, 116, 139);
+    doc.setTextColor(45, 45, 45);
     doc.text(
       pdfSafeText(
         `MTK International Payments (DFC) · Récapitulatif Confirmation ${recap.confirmationRef} · Édité par ${recap.createdBy}`
@@ -801,6 +820,8 @@ export function buildPurchaseConfirmationRecapPdfDocument(
       marginX,
       pageHeight - 8
     );
+    doc.setTextColor(0, 0, 0);
+    doc.setFont('helvetica', 'bold');
     doc.text(`Page ${p} / ${totalPages}`, pageWidth - marginX, pageHeight - 8, {
       align: 'right',
     });

@@ -11,16 +11,29 @@ import {
   CurrencyConsultation,
   ExchangeQuote,
   Invoice,
+  OrderDeduction,
 } from '../types/payment';
 
 class ApiService {
+  private authToken: string | null = null;
+  private tokenProvider: (() => Promise<string | null>) | null = null;
+
   private currentUser: User = {
     id: 'usr_agent1',
+    userCode: '001',
     name: 'Monia Ben Salem',
     email: 'm.bensalem@mtk.tn',
     role: 'AGENT_FINANCIER',
     department: 'Service Trésorerie & Règlements Extérieurs',
   };
+
+  public setAuthToken(token: string | null) {
+    this.authToken = token;
+  }
+
+  public setTokenProvider(provider: (() => Promise<string | null>) | null) {
+    this.tokenProvider = provider;
+  }
 
   public getCurrentUser(): User {
     return this.currentUser;
@@ -42,23 +55,55 @@ class ApiService {
     }
   }
 
-  private getHeaders(): HeadersInit {
-    return {
+  private async getHeaders(): Promise<Record<string, string>> {
+    let token = this.authToken;
+    if (this.tokenProvider) {
+      try {
+        const fresh = await this.tokenProvider();
+        if (fresh) {
+          token = fresh;
+          this.authToken = fresh;
+        }
+      } catch {
+        // fallback to in-memory token
+      }
+    }
+
+    const headers: Record<string, string> = {
       'Content-Type': 'application/json',
       'x-user-id': this.currentUser.id,
       'x-user-role': this.currentUser.role,
       'x-user-name': encodeURIComponent(this.currentUser.name),
     };
+    if (token) {
+      headers['Authorization'] = `Bearer ${token}`;
+    }
+    return headers;
   }
 
   public async getUsers(): Promise<User[]> {
-    const res = await fetch('/api/users', { headers: this.getHeaders() });
+    const res = await fetch('/api/users', { headers: await this.getHeaders() });
     if (!res.ok) throw new Error('Erreur lors du chargement des utilisateurs');
     return res.json();
   }
 
+  public async getNextOrderNumber(fiscalYear?: number): Promise<{
+    orderNumber: string;
+    userPart: string;
+    yearPart: string;
+    seqPart: string;
+  }> {
+    const qs = fiscalYear ? `?fiscalYear=${fiscalYear}` : '';
+    const res = await fetch(`/api/orders/next-number${qs}`, {
+      cache: 'no-store',
+      headers: await this.getHeaders(),
+    });
+    if (!res.ok) throw new Error('Erreur lors du calcul du numéro d’ordre');
+    return res.json();
+  }
+
   public async getSuppliers(): Promise<Supplier[]> {
-    const res = await fetch('/api/suppliers', { headers: this.getHeaders() });
+    const res = await fetch('/api/suppliers', { headers: await this.getHeaders() });
     if (!res.ok) throw new Error('Erreur lors du chargement des fournisseurs');
     return res.json();
   }
@@ -66,7 +111,7 @@ class ApiService {
   public async createSupplier(supplier: Omit<Supplier, 'id'>): Promise<Supplier> {
     const res = await fetch('/api/suppliers', {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(supplier),
     });
     if (!res.ok) {
@@ -77,7 +122,7 @@ class ApiService {
   }
 
   public async getBanks(): Promise<Bank[]> {
-    const res = await fetch('/api/banks', { headers: this.getHeaders() });
+    const res = await fetch('/api/banks', { headers: await this.getHeaders() });
     if (!res.ok) throw new Error('Erreur lors du chargement des banques');
     return res.json();
   }
@@ -85,7 +130,7 @@ class ApiService {
   public async createBank(bank: Omit<Bank, 'id'>): Promise<Bank> {
     const res = await fetch('/api/banks', {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(bank),
     });
     if (!res.ok) {
@@ -98,7 +143,7 @@ class ApiService {
   public async updateBank(id: string, bank: Partial<Bank>): Promise<Bank> {
     const res = await fetch(`/api/banks/${id}`, {
       method: 'PUT',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(bank),
     });
     if (!res.ok) {
@@ -116,7 +161,7 @@ class ApiService {
     const qs = params.toString();
     const res = await fetch(`/api/invoices${qs ? `?${qs}` : ''}`, {
       cache: 'no-store',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
     });
     if (!res.ok) throw new Error('Erreur lors du chargement des factures');
     return res.json();
@@ -125,7 +170,7 @@ class ApiService {
   public async createInvoice(invoice: Partial<Invoice>): Promise<Invoice> {
     const res = await fetch('/api/invoices', {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(invoice),
     });
     if (!res.ok) {
@@ -135,10 +180,45 @@ class ApiService {
     return res.json();
   }
 
+  public async updateInvoice(id: string, invoice: Partial<Invoice>): Promise<Invoice> {
+    const res = await fetch(`/api/invoices/${id}`, {
+      method: 'PUT',
+      headers: await this.getHeaders(),
+      body: JSON.stringify(invoice),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la modification de la facture');
+    }
+    return res.json();
+  }
+
+  public async attachDefinitiveInvoice(
+    id: string,
+    payload: {
+      definitiveInvoiceNumber: string;
+      definitiveInvoiceDate?: string;
+      document?: any;
+    }
+  ): Promise<Invoice> {
+    const res = await fetch(`/api/invoices/${id}/definitive`, {
+      method: 'POST',
+      headers: await this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(
+        err.error || 'Erreur lors de l’enregistrement de la facture définitive'
+      );
+    }
+    return res.json();
+  }
+
   public async deleteInvoice(id: string): Promise<void> {
     const res = await fetch(`/api/invoices/${id}`, {
       method: 'DELETE',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
     });
     if (!res.ok) {
       const err = await res.json();
@@ -160,7 +240,7 @@ class ApiService {
 
     const res = await fetch(`/api/orders?${params.toString()}`, {
       cache: 'no-store',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
     });
     if (!res.ok) throw new Error('Erreur chargement des ordres de paiement');
     return res.json();
@@ -169,16 +249,21 @@ class ApiService {
   public async getOrderById(id: string): Promise<PaymentOrder> {
     const res = await fetch(`/api/orders/${id}`, {
       cache: 'no-store',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
     });
     if (!res.ok) throw new Error('Ordre introuvable');
     return res.json();
   }
 
-  public async createOrder(order: Partial<PaymentOrder>): Promise<PaymentOrder> {
+  public async createOrder(
+    order: Partial<PaymentOrder> & {
+      definitiveInvoiceNumber?: string;
+      definitiveInvoiceDate?: string;
+    }
+  ): Promise<PaymentOrder> {
     const res = await fetch('/api/orders', {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(order),
     });
     if (!res.ok) {
@@ -191,7 +276,7 @@ class ApiService {
   public async updateOrder(id: string, order: Partial<PaymentOrder>): Promise<PaymentOrder> {
     const res = await fetch(`/api/orders/${id}`, {
       method: 'PUT',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(order),
     });
     if (!res.ok) {
@@ -199,6 +284,33 @@ class ApiService {
       throw new Error(err.error || 'Erreur lors de la mise à jour');
     }
     return res.json();
+  }
+
+  public async updateOrderDeductions(
+    orderId: string,
+    payload: { deductions: Array<Partial<OrderDeduction>>; grossAmount?: number }
+  ): Promise<PaymentOrder> {
+    const res = await fetch(`/api/orders/${orderId}/deductions`, {
+      method: 'PUT',
+      headers: await this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la mise à jour des déductions');
+    }
+    return res.json();
+  }
+
+  public async deleteOrder(id: string): Promise<void> {
+    const res = await fetch(`/api/orders/${id}`, {
+      method: 'DELETE',
+      headers: await this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la suppression de l’ordre');
+    }
   }
 
   public async changeOrderStatus(
@@ -210,7 +322,7 @@ class ApiService {
   ): Promise<PaymentOrder> {
     const res = await fetch(`/api/orders/${orderId}/status`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify({ targetStatus, comment, depositData, executionData }),
     });
     if (!res.ok) {
@@ -223,7 +335,7 @@ class ApiService {
   public async recordDeposit(orderId: string, depositData: Partial<BankDeposit>): Promise<PaymentOrder> {
     const res = await fetch(`/api/orders/${orderId}/deposit`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(depositData),
     });
     if (!res.ok) {
@@ -236,7 +348,7 @@ class ApiService {
   public async recordExecution(orderId: string, executionData: Partial<PaymentOrder>): Promise<PaymentOrder> {
     const res = await fetch(`/api/orders/${orderId}/execute`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(executionData),
     });
     if (!res.ok) {
@@ -249,7 +361,7 @@ class ApiService {
   public async addDocument(orderId: string, doc: any): Promise<PaymentOrder> {
     const res = await fetch(`/api/orders/${orderId}/documents`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(doc),
     });
     if (!res.ok) {
@@ -271,7 +383,7 @@ class ApiService {
 
     const res = await fetch(`/api/stats?${params.toString()}`, {
       cache: 'no-store',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
     });
     if (!res.ok) throw new Error('Erreur chargement statistiques');
     return res.json();
@@ -280,7 +392,7 @@ class ApiService {
   public async getConsultations(): Promise<CurrencyConsultation[]> {
     const res = await fetch('/api/consultations', {
       cache: 'no-store',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
     });
     if (!res.ok) throw new Error('Erreur chargement des consultations de change');
     return res.json();
@@ -300,7 +412,7 @@ class ApiService {
   }): Promise<CurrencyConsultation> {
     const res = await fetch('/api/consultations', {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
@@ -326,7 +438,7 @@ class ApiService {
   ): Promise<CurrencyConsultation> {
     const res = await fetch(`/api/consultations/${consultationId}/quotes`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify(payload),
     });
     if (!res.ok) {
@@ -336,10 +448,37 @@ class ApiService {
     return res.json();
   }
 
+  public async updateConsultation(
+    consultationId: string,
+    payload: Partial<CurrencyConsultation>
+  ): Promise<CurrencyConsultation> {
+    const res = await fetch(`/api/consultations/${consultationId}`, {
+      method: 'PUT',
+      headers: await this.getHeaders(),
+      body: JSON.stringify(payload),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la modification de la consultation');
+    }
+    return res.json();
+  }
+
+  public async deleteConsultation(consultationId: string): Promise<void> {
+    const res = await fetch(`/api/consultations/${consultationId}`, {
+      method: 'DELETE',
+      headers: await this.getHeaders(),
+    });
+    if (!res.ok) {
+      const err = await res.json();
+      throw new Error(err.error || 'Erreur lors de la suppression de la consultation');
+    }
+  }
+
   public async cancelConsultation(consultationId: string, reason: string): Promise<CurrencyConsultation> {
     const res = await fetch(`/api/consultations/${consultationId}/cancel`, {
       method: 'POST',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
       body: JSON.stringify({ reason }),
     });
     if (!res.ok) {
@@ -352,15 +491,34 @@ class ApiService {
   public async getAuditLogs(): Promise<AuditLog[]> {
     const res = await fetch('/api/audit-logs', {
       cache: 'no-store',
-      headers: this.getHeaders(),
+      headers: await this.getHeaders(),
     });
     if (!res.ok) throw new Error('Erreur chargement journal d’audit');
     return res.json();
   }
 
   public async resetDemoData(): Promise<void> {
-    const res = await fetch('/api/reset-demo', { method: 'POST', headers: this.getHeaders() });
+    const res = await fetch('/api/reset-demo', {
+      method: 'POST',
+      headers: await this.getHeaders(),
+    });
     if (!res.ok) throw new Error('Erreur réinitialisation');
+  }
+
+  public async exportCsv(): Promise<void> {
+    const res = await fetch('/api/export-csv', {
+      headers: await this.getHeaders(),
+    });
+    if (!res.ok) throw new Error('Erreur lors de l’export Excel / CSV');
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = 'MTK_Ordres_Paiement_International.csv';
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
   }
 }
 

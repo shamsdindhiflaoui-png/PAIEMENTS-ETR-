@@ -16,12 +16,15 @@ import {
   FileCheck2,
   X,
   ClipboardList,
+  Printer,
+  Pencil,
 } from 'lucide-react';
 import {
   Bank,
   CurrencyConsultation,
   ExchangeQuote,
   PaymentOrder,
+  User,
 } from '../types/payment';
 import {
   formatConsultationAmount,
@@ -43,12 +46,17 @@ import {
   generateNextConfirmationRef,
 } from '../utils/purchaseConfirmationPdf';
 import { formatTndCurrency, STATUS_META } from '../utils/workflowRules';
+import { downloadTablePdf } from '../utils/tablePdf';
+import { canUserManageConsultation, isAdministrator } from '../utils/adminRules';
+import { AdminEditConsultationModal } from './AdminEditConsultationModal';
+import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
 
 interface ConsultationDetailViewProps {
   consultation: CurrencyConsultation;
   orders: PaymentOrder[];
   consultations: CurrencyConsultation[];
   banks: Bank[];
+  currentUser?: User;
   onBack: () => void;
   onOpenPdfModal: (consultation: CurrencyConsultation) => void;
   onOpenConfirmationModal: (consultation: CurrencyConsultation, initialTab?: 'recap' | number) => void;
@@ -69,6 +77,11 @@ interface ConsultationDetailViewProps {
     }
   ) => Promise<void>;
   onCancelConsultation: (consultationId: string, reason: string) => Promise<void>;
+  onUpdateConsultation?: (
+    consultationId: string,
+    payload: Partial<CurrencyConsultation>
+  ) => Promise<void>;
+  onDeleteConsultation?: (consultationId: string) => Promise<void>;
 }
 
 export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
@@ -76,6 +89,7 @@ export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
   orders,
   consultations,
   banks,
+  currentUser,
   onBack,
   onOpenPdfModal,
   onOpenConfirmationModal,
@@ -83,7 +97,14 @@ export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
   onNavigateToOrders,
   onRecordQuotes,
   onCancelConsultation,
+  onUpdateConsultation,
+  onDeleteConsultation,
 }) => {
+  const [adminEditOpen, setAdminEditOpen] = useState(false);
+  const [adminDeleteOpen, setAdminDeleteOpen] = useState(false);
+
+  const isAdmin = isAdministrator(currentUser);
+  const canManageConsultation = canUserManageConsultation(currentUser, consultation).allowed;
   const [drafts, setDrafts] = useState<BankOfferDraft[]>(() =>
     buildInitialOfferDrafts(banks, consultation)
   );
@@ -360,6 +381,38 @@ export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
               <span>Annuler</span>
             </button>
           )}
+
+          {canManageConsultation && onUpdateConsultation && (
+            <button
+              type="button"
+              onClick={() => setAdminEditOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-amber-800 bg-amber-50 hover:bg-amber-100 border border-amber-300 rounded-lg transition-colors shadow-2xs"
+              title={
+                isAdmin
+                  ? 'Modifier la consultation (Administrateur)'
+                  : 'Modifier ma consultation'
+              }
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              <span>Modifier</span>
+            </button>
+          )}
+
+          {canManageConsultation && onDeleteConsultation && (
+            <button
+              type="button"
+              onClick={() => setAdminDeleteOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-rose-700 bg-white hover:bg-rose-50 border border-rose-300 rounded-lg transition-colors shadow-2xs"
+              title={
+                isAdmin
+                  ? 'Supprimer la consultation (Administrateur)'
+                  : 'Supprimer ma consultation'
+              }
+            >
+              <Trash2 className="w-3.5 h-3.5" />
+              <span>Supprimer</span>
+            </button>
+          )}
         </div>
       </div>
 
@@ -504,8 +557,59 @@ export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
             </div>
           </div>
 
-          <div className="text-xs font-mono font-semibold text-slate-700 bg-white border border-slate-200 px-3 py-1.5 rounded-lg shrink-0">
-            {rankedOffers.length} / {drafts.length} banque(s) cotée(s)
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            <div className="text-xs font-mono font-semibold text-slate-700 bg-white border border-slate-200 px-3 py-1.5 rounded-lg">
+              {rankedOffers.length} / {drafts.length} banque(s) cotée(s)
+            </div>
+            <button
+              type="button"
+              onClick={() =>
+                downloadTablePdf({
+                  title: `Tableau des Cotations Bancaires - ${consultation.consultationNumber}`,
+                  subtitle: `Opération du ${formatConsultationDate(
+                    consultation.operationDate
+                  )} | Montant : ${formatConsultationAmount(
+                    consultation.totalAmount,
+                    consultation.currency
+                  )}`,
+                  filename: `Cotations_${consultation.consultationNumber}_MTK.pdf`,
+                  columns: [
+                    { header: 'Banque', widthRatio: 2.0 },
+                    { header: 'Couverture', align: 'center', widthRatio: 1.0 },
+                    { header: `Montant proposé (${consultation.currency})`, align: 'right', widthRatio: 1.4 },
+                    { header: 'Cote reçue (TND)', align: 'right', widthRatio: 1.2 },
+                    { header: 'Contre-valeur estimée', align: 'right', widthRatio: 1.4 },
+                  ],
+                  rows: drafts.map(draft => {
+                    const parsedRate = parseFloat((draft.rate || '').replace(',', '.'));
+                    const effectiveAmount = draft.isFullAmount
+                      ? consultation.totalAmount
+                      : parseFloat((draft.proposedAmount || '').replace(/\s+/g, '').replace(',', '.'));
+                    const hasValidPreview =
+                      !isNaN(parsedRate) &&
+                      parsedRate > 0 &&
+                      !isNaN(effectiveAmount) &&
+                      effectiveAmount > 0;
+                    const counterValue = hasValidPreview
+                      ? Number((effectiveAmount * parsedRate).toFixed(3))
+                      : 0;
+                    return [
+                      `${draft.bankName} (${draft.bankCode || 'BQ'})`,
+                      draft.isFullAmount ? 'Total' : 'Partiel',
+                      !isNaN(effectiveAmount) && effectiveAmount > 0
+                        ? formatConsultationAmount(effectiveAmount, consultation.currency)
+                        : '-',
+                      !isNaN(parsedRate) && parsedRate > 0 ? `${parsedRate.toFixed(4)} TND` : '-',
+                      hasValidPreview ? formatTndCurrency(counterValue) : '-',
+                    ];
+                  }),
+                })
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors whitespace-nowrap"
+            >
+              <Printer className="w-3.5 h-3.5 text-slate-600" />
+              <span>Imprimer tableau PDF</span>
+            </button>
           </div>
         </div>
 
@@ -742,15 +846,73 @@ export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
             </div>
           </div>
 
-          {rankingSummary.bestOffer && (
-            <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 font-semibold">
-              <TrendingDown className="w-4 h-4 text-emerald-600" />
-              <span>
-                Moins-disant : {rankingSummary.bestOffer.bankCode || rankingSummary.bestOffer.bankName}{' '}
-                ({rankingSummary.bestOffer.rate.toFixed(4)} TND)
-              </span>
-            </div>
-          )}
+          <div className="flex flex-wrap items-center gap-2 shrink-0">
+            {rankingSummary.bestOffer && (
+              <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-900 font-semibold">
+                <TrendingDown className="w-4 h-4 text-emerald-600" />
+                <span>
+                  Moins-disant : {rankingSummary.bestOffer.bankCode || rankingSummary.bestOffer.bankName}{' '}
+                  ({rankingSummary.bestOffer.rate.toFixed(4)} TND)
+                </span>
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() =>
+                downloadTablePdf({
+                  title: `Classement des Offres (Moins-Disant) - ${consultation.consultationNumber}`,
+                  subtitle: `Opération du ${formatConsultationDate(
+                    consultation.operationDate
+                  )} | Montant : ${formatConsultationAmount(
+                    consultation.totalAmount,
+                    consultation.currency
+                  )}`,
+                  filename: `Classement_Offres_${consultation.consultationNumber}_MTK.pdf`,
+                  columns: [
+                    { header: 'Rang', widthRatio: 1.1 },
+                    { header: 'Banque', widthRatio: 1.8 },
+                    { header: 'Montant proposé', align: 'right', widthRatio: 1.4 },
+                    { header: 'Cote (TND)', align: 'right', widthRatio: 1.0 },
+                    { header: 'Contre-valeur TND', align: 'right', widthRatio: 1.3 },
+                    { header: 'Écart vs Moins-Disant', align: 'right', widthRatio: 1.4 },
+                    { header: 'Décision', align: 'center', widthRatio: 1.1 },
+                  ],
+                  rows: rankedOffers.map(offer => {
+                    const isSelectedWinner =
+                      consultation.status === 'CLOTUREE' &&
+                      consultation.selectedBankId === offer.bankId;
+                    return [
+                      offer.isLowestRate
+                        ? '#1 - Moins-disant'
+                        : offer.isHighestRate
+                        ? `#${offer.rank} - Plus-disant`
+                        : `#${offer.rank}`,
+                      `${offer.bankName}${offer.bankCode ? ` (${offer.bankCode})` : ''}`,
+                      `${formatConsultationAmount(offer.proposedAmount, consultation.currency)} (${
+                        offer.isFullAmount ? '100%' : `${offer.coveragePercent}%`
+                      })`,
+                      offer.rate.toFixed(4),
+                      formatTndCurrency(offer.counterValueTnd),
+                      offer.isLowestRate
+                        ? 'Meilleure offre'
+                        : `+${offer.spreadVsBestRate.toFixed(4)} TND`,
+                      consultation.status === 'OUVERTE'
+                        ? offer.isLowestRate
+                          ? 'Recommandée'
+                          : 'En concurrence'
+                        : isSelectedWinner
+                        ? 'Offre retenue'
+                        : 'Non retenue',
+                    ];
+                  }),
+                })
+              }
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold text-slate-700 bg-white hover:bg-slate-100 border border-slate-300 rounded-lg transition-colors whitespace-nowrap"
+            >
+              <Printer className="w-3.5 h-3.5 text-slate-600" />
+              <span>Imprimer tableau PDF</span>
+            </button>
+          </div>
         </div>
 
         {rankedOffers.length > 0 ? (
@@ -1111,6 +1273,34 @@ export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
             </div>
           </form>
         </div>
+      )}
+
+      {adminEditOpen && onUpdateConsultation && (
+        <AdminEditConsultationModal
+          consultation={consultation}
+          banks={banks}
+          isAdmin={isAdmin}
+          onSave={onUpdateConsultation}
+          onClose={() => setAdminEditOpen(false)}
+        />
+      )}
+
+      {adminDeleteOpen && onDeleteConsultation && (
+        <AdminConfirmDeleteModal
+          title="Supprimer définitivement cette consultation"
+          entityRef={consultation.consultationNumber}
+          description={`Vous êtes sur le point de supprimer la consultation ${consultation.consultationNumber} (${formatConsultationAmount(consultation.totalAmount, consultation.currency)}).`}
+          warningNote={
+            consultation.orderIds.length > 0
+              ? `${consultation.orderIds.length} ordre(s) rattaché(s) auront leur passerelle change réinitialisée (« NON_DEMARRE ») afin de pouvoir être rattachés à une nouvelle consultation.`
+              : undefined
+          }
+          onConfirm={async () => {
+            await onDeleteConsultation(consultation.id);
+            onBack();
+          }}
+          onClose={() => setAdminDeleteOpen(false)}
+        />
       )}
     </div>
   );

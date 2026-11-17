@@ -115,7 +115,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
   const roleInfo = getRoleBadge(currentUser.role);
 
   return (
-    <aside className="w-68 bg-slate-900 text-slate-200 flex flex-col shrink-0 h-screen border-r border-slate-800 select-none">
+    <aside className="w-68 bg-slate-900 text-slate-200 flex flex-col shrink-0 h-screen border-r border-slate-800 select-none print:hidden">
       {/* Brand Header */}
       <div className="p-5 border-b border-slate-800/80 bg-slate-950/40">
         <div className="flex items-center gap-3">

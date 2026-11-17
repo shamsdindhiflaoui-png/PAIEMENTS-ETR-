@@ -455,6 +455,13 @@ export function formatForeignCurrency(amount: number, currency: string): string 
   }).format(amount);
 }
 
+export interface StructuredOrderNumberParts {
+  orderNumber: string;
+  userPart: string;
+  yearPart: string;
+  seqPart: string;
+}
+
 /**
  * Génération du numéro d'ordre selon la structure officielle MTK :
  * 000 UTILISATEUR 000 ANNEE 0000 ORDRE
@@ -465,12 +472,7 @@ export function generateStructuredOrderNumber(
   year: number = new Date().getFullYear(),
   existingCount: number = 0,
   separator: string = '-'
-): {
-  orderNumber: string;
-  userPart: string;
-  yearPart: string;
-  seqPart: string;
-} {
+): StructuredOrderNumberParts {
   const uDigits = String(userCode).replace(/\D/g, '') || '1';
   const userPart = uDigits.padStart(3, '0').slice(-3);
 
@@ -485,6 +487,72 @@ export function generateStructuredOrderNumber(
     orderNumber,
     userPart,
     yearPart,
+    seqPart,
+  };
+}
+
+/**
+ * Calcule automatiquement le prochain numéro d'ordre structuré
+ * (000 UTILISATEUR · 000 ANNÉE · 0000 ORDRE) sans risque de doublon.
+ */
+export function computeNextStructuredOrderNumber(
+  userCode: string | number = '001',
+  year: number = new Date().getFullYear(),
+  existingOrders: Array<{
+    orderNumber?: string;
+    fiscalYear?: number;
+    yearCode?: string;
+    orderSeq?: string;
+  }> = [],
+  separator: string = '-'
+): StructuredOrderNumberParts {
+  const base = generateStructuredOrderNumber(userCode, year, 0, separator);
+  const existingNumbers = new Set(
+    existingOrders.map(o => o.orderNumber).filter((n): n is string => Boolean(n))
+  );
+
+  const matchingYearOrders = existingOrders.filter(o => {
+    if (o.fiscalYear === year) return true;
+    if (o.yearCode === base.yearPart) return true;
+    if (o.orderNumber) {
+      if (o.orderNumber.includes(`-${year}-`) || o.orderNumber.includes(`-${base.yearPart}-`)) {
+        return true;
+      }
+    }
+    return false;
+  });
+
+  let maxSeq = matchingYearOrders.length;
+  for (const o of matchingYearOrders) {
+    if (o.orderSeq && /^\d+$/.test(o.orderSeq.trim())) {
+      maxSeq = Math.max(maxSeq, parseInt(o.orderSeq.trim(), 10));
+    }
+    if (o.orderNumber) {
+      const m = o.orderNumber.match(/(\d{4})$/);
+      if (m) {
+        maxSeq = Math.max(maxSeq, parseInt(m[1], 10));
+      }
+    }
+  }
+
+  let nextSeq = maxSeq + 1;
+  let seqPart = String(nextSeq).padStart(4, '0');
+  let orderNumber = separator
+    ? `${base.userPart}${separator}${base.yearPart}${separator}${seqPart}`
+    : `${base.userPart}${base.yearPart}${seqPart}`;
+
+  while (existingNumbers.has(orderNumber)) {
+    nextSeq += 1;
+    seqPart = String(nextSeq).padStart(4, '0');
+    orderNumber = separator
+      ? `${base.userPart}${separator}${base.yearPart}${separator}${seqPart}`
+      : `${base.userPart}${base.yearPart}${seqPart}`;
+  }
+
+  return {
+    orderNumber,
+    userPart: base.userPart,
+    yearPart: base.yearPart,
     seqPart,
   };
 }

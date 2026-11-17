@@ -206,16 +206,16 @@ export function buildConsultationPdfDocument(consultation: CurrencyConsultation)
   const topSectionH = 22.5;
   const bottomSectionH = 16;
 
-  doc.setFillColor(232, 232, 232);
-  doc.setDrawColor(80, 80, 80);
-  doc.setLineWidth(0.3);
+  doc.setFillColor(246, 246, 246);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.35);
   doc.rect(boxX, boxY, boxW, topSectionH + bottomSectionH, 'FD');
 
   // Horizontal divider inside box
   doc.line(boxX, boxY + topSectionH, boxX + boxW, boxY + topSectionH);
 
   // Box Top Section
-  doc.setTextColor(15, 15, 15);
+  doc.setTextColor(0, 0, 0);
   doc.setFont('times', 'italic');
   doc.setFontSize(14);
   doc.text('MANUFACTURE DES TABACS DE KAIROUAN', pageWidth / 2, boxY + 6.5, { align: 'center' });
@@ -244,11 +244,10 @@ export function buildConsultationPdfDocument(consultation: CurrencyConsultation)
   const emailLineW = doc.getTextWidth(fullEmailLine);
   const emailPrefixW = doc.getTextWidth(emailPrefix);
   const emailStartX = pageWidth / 2 - emailLineW / 2;
-  doc.setTextColor(15, 15, 15);
+  doc.setTextColor(0, 0, 0);
   doc.text(emailPrefix, emailStartX, bY + 14);
-  doc.setTextColor(29, 78, 216);
   doc.text(contactEmail, emailStartX + emailPrefixW, bY + 14);
-  doc.setDrawColor(29, 78, 216);
+  doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.25);
   doc.line(
     emailStartX + emailPrefixW,
@@ -314,7 +313,7 @@ export function buildConsultationPdfDocument(consultation: CurrencyConsultation)
     doc,
     [
       { text: 'A cet effet nous vous prions de nous communiquer par Email (' },
-      { text: contactEmail, color: [29, 78, 216], underline: true },
+      { text: contactEmail, bold: true, underline: true },
       { text: ') ou par fax, (en remplissant le tableau ci-après) votre meilleure cotation du jour de l\'opération avant ' },
       { text: submissionTime, bold: true, underline: true },
       { text: ' (heure limite) aux numéros suivants :' },
@@ -359,12 +358,12 @@ export function buildConsultationPdfDocument(consultation: CurrencyConsultation)
 
   // --- BOTTOM SECTION: A REMPLIR PAR LA BANQUE ---
   const footerLineY = 242;
-  doc.setFillColor(90, 90, 90);
-  doc.rect(marginX, footerLineY, contentWidth, 2, 'F');
+  doc.setFillColor(0, 0, 0);
+  doc.rect(marginX, footerLineY, contentWidth, 1.2, 'F');
 
   doc.setFont('times', 'bolditalic');
   doc.setFontSize(11);
-  doc.setTextColor(15, 15, 15);
+  doc.setTextColor(0, 0, 0);
   doc.text('A REMPLIR PAR LA BANQUE', pageWidth / 2, footerLineY + 7.5, { align: 'center' });
 
   // Table: Banque | Montant | Cours
@@ -374,8 +373,8 @@ export function buildConsultationPdfDocument(consultation: CurrencyConsultation)
   const headerH = 6.5;
   const rowH = 6.5;
 
-  doc.setDrawColor(40, 40, 40);
-  doc.setLineWidth(0.3);
+  doc.setDrawColor(0, 0, 0);
+  doc.setLineWidth(0.35);
   doc.rect(tableX, tableY, contentWidth, headerH + rowH * 2);
   // Column dividers
   doc.line(tableX + colW, tableY, tableX + colW, tableY + headerH + rowH * 2);
@@ -393,7 +392,7 @@ export function buildConsultationPdfDocument(consultation: CurrencyConsultation)
   // Subtle audit traceability line at bottom margin
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.5);
-  doc.setTextColor(120, 120, 120);
+  doc.setTextColor(55, 55, 55);
   doc.text(
     pdfSafeText(
       `Réf. Consultation : ${consultation.consultationNumber}  |  Ordres rattachés : ${consultation.orderNumbers.join(', ')}`

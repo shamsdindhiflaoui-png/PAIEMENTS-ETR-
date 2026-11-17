@@ -15,19 +15,35 @@ import {
   FileText,
   AlertCircle,
   ExternalLink,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
-import { PaymentOrder, PaymentStatus, Bank, Supplier, FilterParams } from '../types/payment';
+import {
+  PaymentOrder,
+  PaymentStatus,
+  Bank,
+  Supplier,
+  FilterParams,
+  User,
+} from '../types/payment';
 import { STATUS_META, formatForeignCurrency } from '../utils/workflowRules';
+import { downloadTablePdf } from '../utils/tablePdf';
+import { canUserManageOrder, isAdministrator } from '../utils/adminRules';
+import { AdminEditOrderModal } from './AdminEditOrderModal';
+import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
 
 interface OrderListViewProps {
   orders: PaymentOrder[];
   banks: Bank[];
   suppliers: Supplier[];
+  currentUser?: User;
   filters: FilterParams;
   onFilterChange: (newFilters: FilterParams) => void;
   onSelectOrder: (orderId: string) => void;
   onPrintOrder: (order: PaymentOrder) => void;
   onNewOrder: () => void;
+  onUpdateOrder?: (id: string, payload: Partial<PaymentOrder>) => Promise<void>;
+  onDeleteOrder?: (id: string) => Promise<void>;
   onRefresh?: () => Promise<void> | void;
 }
 
@@ -38,11 +54,14 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
   orders,
   banks,
   suppliers,
+  currentUser,
   filters,
   onFilterChange,
   onSelectOrder,
   onPrintOrder,
   onNewOrder,
+  onUpdateOrder,
+  onDeleteOrder,
   onRefresh,
 }) => {
   const [sortField, setSortField] = useState<SortField>('createdAt');
@@ -51,6 +70,10 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
   const [currentPage, setCurrentPage] = useState<number>(1);
   const [showAdvancedFilters, setShowAdvancedFilters] = useState<boolean>(false);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [editingOrder, setEditingOrder] = useState<PaymentOrder | null>(null);
+  const [deletingOrder, setDeletingOrder] = useState<PaymentOrder | null>(null);
+
+  const isAdmin = isAdministrator(currentUser);
 
   // Sorting
   const sortedOrders = useMemo(() => {
@@ -92,6 +115,48 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
     } finally {
       setIsRefreshing(false);
     }
+  };
+
+  const handlePrintOrdersPdf = () => {
+    const activeFiltersSummary = [
+      filters.status && filters.status !== 'ALL'
+        ? `Statut : ${STATUS_META[filters.status]?.label || filters.status}`
+        : 'Tous statuts',
+      filters.currency && filters.currency !== 'ALL' ? `Devise : ${filters.currency}` : null,
+      filters.fiscalYear && filters.fiscalYear !== 'ALL'
+        ? `Exercice : ${filters.fiscalYear}`
+        : null,
+      filters.searchQuery ? `Recherche : "${filters.searchQuery}"` : null,
+    ]
+      .filter(Boolean)
+      .join(' · ');
+
+    downloadTablePdf({
+      title: 'Registre des Ordres de Paiement Internationaux',
+      subtitle: activeFiltersSummary,
+      filename: `Registre_Ordres_MTK_${new Date().toISOString().split('T')[0]}.pdf`,
+      orientation: 'landscape',
+      columns: [
+        { header: 'N° Ordre', widthRatio: 1.15 },
+        { header: 'Date', widthRatio: 0.85 },
+        { header: 'Facture / Contrat', widthRatio: 1.2 },
+        { header: 'Bénéficiaire', widthRatio: 1.8 },
+        { header: 'Banque MTK', widthRatio: 1.4 },
+        { header: 'Type', widthRatio: 0.8 },
+        { header: 'Montant', align: 'right', widthRatio: 1.1 },
+        { header: 'Statut', widthRatio: 1.2 },
+      ],
+      rows: sortedOrders.map(ord => [
+        ord.orderNumber,
+        ord.createdAt.split('T')[0],
+        [ord.invoiceNumber, ord.contractNumber].filter(Boolean).join(' / ') || '—',
+        ord.beneficiaryName,
+        ord.bankName,
+        ord.transferType || 'VIREMENT',
+        formatForeignCurrency(ord.amount, ord.currency),
+        STATUS_META[ord.status]?.label || ord.status,
+      ]),
+    });
   };
 
   const handleSort = (field: SortField) => {
@@ -180,6 +245,16 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
                 <span>Actualiser</span>
               </button>
             )}
+
+            <button
+              type="button"
+              onClick={handlePrintOrdersPdf}
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-semibold rounded-lg border border-slate-300 bg-white text-slate-700 hover:bg-slate-50 hover:text-blue-700 transition-colors whitespace-nowrap shadow-2xs"
+              title="Télécharger / Imprimer le tableau des ordres en PDF"
+            >
+              <Printer className="w-3.5 h-3.5 text-slate-500" />
+              <span>Imprimer tableau PDF</span>
+            </button>
           </div>
         </div>
 
@@ -433,6 +508,36 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
                         >
                           <Printer className="w-4 h-4" />
                         </button>
+                        {canUserManageOrder(currentUser, order).allowed && onUpdateOrder && (
+                          <button
+                            type="button"
+                            onClick={() => setEditingOrder(order)}
+                            className="p-1.5 text-amber-600 hover:text-amber-800 hover:bg-amber-50 rounded-md transition-colors"
+                            title={
+                              isAdmin
+                                ? "Modifier l'ordre (Administrateur)"
+                                : 'Modifier mon ordre'
+                            }
+                            aria-label={`Modifier l'ordre ${order.orderNumber}`}
+                          >
+                            <Pencil className="w-4 h-4" />
+                          </button>
+                        )}
+                        {canUserManageOrder(currentUser, order).allowed && onDeleteOrder && (
+                          <button
+                            type="button"
+                            onClick={() => setDeletingOrder(order)}
+                            className="p-1.5 text-rose-500 hover:text-rose-700 hover:bg-rose-50 rounded-md transition-colors"
+                            title={
+                              isAdmin
+                                ? "Supprimer l'ordre (Administrateur)"
+                                : 'Supprimer mon ordre'
+                            }
+                            aria-label={`Supprimer l'ordre ${order.orderNumber}`}
+                          >
+                            <Trash2 className="w-4 h-4" />
+                          </button>
+                        )}
                       </div>
                     </td>
                   </tr>
@@ -512,6 +617,31 @@ export const OrderListView: React.FC<OrderListViewProps> = ({
           </div>
         </div>
       </div>
+
+      {editingOrder && onUpdateOrder && (
+        <AdminEditOrderModal
+          order={editingOrder}
+          banks={banks}
+          isAdmin={isAdmin}
+          onSave={onUpdateOrder}
+          onClose={() => setEditingOrder(null)}
+        />
+      )}
+
+      {deletingOrder && onDeleteOrder && (
+        <AdminConfirmDeleteModal
+          title="Supprimer définitivement cet ordre de paiement"
+          entityRef={deletingOrder.orderNumber}
+          description={`Vous êtes sur le point de supprimer l'ordre ${deletingOrder.orderNumber} (${deletingOrder.beneficiaryName} — ${formatForeignCurrency(deletingOrder.amount, deletingOrder.currency)}). Cette action est irréversible et sera journalisée.`}
+          warningNote={
+            deletingOrder.exchangeTransaction?.consultationNumber
+              ? `Cet ordre est lié à la consultation ${deletingOrder.exchangeTransaction.consultationNumber} : il en sera automatiquement détaché et le montant total de la consultation sera recalculé.`
+              : undefined
+          }
+          onConfirm={() => onDeleteOrder(deletingOrder.id)}
+          onClose={() => setDeletingOrder(null)}
+        />
+      )}
     </div>
   );
 };
