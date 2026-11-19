@@ -7,13 +7,19 @@ import {
   Building2,
   CheckCircle2,
   ClipboardList,
+  Pencil,
+  RotateCcw,
+  Save,
+  Check,
 } from 'lucide-react';
 import {
   Bank,
   BankConfirmationContact,
   CurrencyConsultation,
+  Invoice,
   PaymentOrder,
   PurchaseConfirmationLetter,
+  PurchaseConfirmationLetterTextOverrides,
   PurchaseConfirmationOrderLine,
 } from '../types/payment';
 import {
@@ -22,9 +28,13 @@ import {
   buildOrderBulletSegments,
   buildLetterClosingSegments,
   downloadPurchaseConfirmationPdf,
+  extractPurchaseConfirmationOverridesForSave,
   formatContactOrderTypesTag,
   formatRate4,
   formatTndCounterValue,
+  getConfirmationLetterOverrideKey,
+  resolvePurchaseConfirmationLetterContent,
+  ResolvedPurchaseConfirmationContent,
   RichSegment,
 } from '../utils/purchaseConfirmationPdf';
 import {
@@ -32,12 +42,20 @@ import {
   downloadPurchaseConfirmationRecapPdf,
 } from '../utils/purchaseConfirmationRecapPdf';
 import { formatConsultationAmount, formatConsultationDate } from '../utils/consultationPdf';
+import { buildPurchaseConfirmationQrPayload } from '../utils/consultationQr';
+import { QrCodeSvg } from './QrCodeSvg';
 
 interface PurchaseConfirmationPdfModalProps {
   consultation: CurrencyConsultation;
   orders: PaymentOrder[];
+  invoices?: Invoice[];
   banks: Bank[];
   initialTab?: 'recap' | number;
+  canSave?: boolean;
+  onSaveConfirmationTexts?: (
+    consultationId: string,
+    customConfirmationTexts: Record<string, PurchaseConfirmationLetterTextOverrides> | null
+  ) => Promise<void>;
   onClose: () => void;
 }
 
@@ -63,8 +81,11 @@ const RenderRichText: React.FC<{ segments: RichSegment[] }> = ({ segments }) => 
 export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModalProps> = ({
   consultation,
   orders,
+  invoices = [],
   banks,
   initialTab = 0,
+  canSave = false,
+  onSaveConfirmationTexts,
   onClose,
 }) => {
   const letters = useMemo(
@@ -78,10 +99,22 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
   );
 
   const [activeTab, setActiveTab] = useState<'recap' | number>(initialTab);
+  const [isEditing, setIsEditing] = useState(false);
+  const [overridesByKey, setOverridesByKey] = useState<
+    Record<string, PurchaseConfirmationLetterTextOverrides>
+  >(() => consultation.customConfirmationTexts || {});
+  const [isSaving, setIsSaving] = useState(false);
+  const [savedNotice, setSavedNotice] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     setActiveTab(initialTab);
   }, [consultation.id, letters.length, initialTab]);
+
+  useEffect(() => {
+    setOverridesByKey(consultation.customConfirmationTexts || {});
+    setSaveError(null);
+  }, [consultation]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -96,10 +129,107 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
   const isSingleSameBank =
     letters.length === 1 && letters[0].role === 'SAME_BANK_PURCHASE';
 
+  const activeLetterKey = activeLetter ? getConfirmationLetterOverrideKey(activeLetter) : '';
+  const activeLetterOverrides = activeLetterKey ? overridesByKey[activeLetterKey] : undefined;
+
+  const resolvedActiveContent = useMemo(
+    () =>
+      activeLetter
+        ? resolvePurchaseConfirmationLetterContent(activeLetter, activeLetterOverrides)
+        : null,
+    [activeLetter, activeLetterOverrides]
+  );
+
+  const activeQrPayload = useMemo(
+    () =>
+      activeLetter
+        ? buildPurchaseConfirmationQrPayload(activeLetter, consultation, orders, invoices)
+        : '',
+    [activeLetter, consultation, orders, invoices]
+  );
+
+  const hasCustomTextForActive = Boolean(
+    activeLetter &&
+      resolvedActiveContent &&
+      extractPurchaseConfirmationOverridesForSave(resolvedActiveContent, activeLetter)
+  );
+  const hasAnyCustomText = Object.keys(overridesByKey).length > 0;
+
+  const updateActiveLetterField = <K extends keyof ResolvedPurchaseConfirmationContent>(
+    field: K,
+    value: ResolvedPurchaseConfirmationContent[K]
+  ) => {
+    if (!activeLetter || !resolvedActiveContent) return;
+    setSavedNotice(false);
+    setSaveError(null);
+    const nextContent: ResolvedPurchaseConfirmationContent = {
+      ...resolvedActiveContent,
+      [field]: value,
+    };
+    const nextOverride = extractPurchaseConfirmationOverridesForSave(nextContent, activeLetter);
+    setOverridesByKey(prev => {
+      const next = { ...prev };
+      if (nextOverride) {
+        next[activeLetterKey] = nextOverride;
+      } else {
+        delete next[activeLetterKey];
+      }
+      return next;
+    });
+  };
+
+  const updateActiveBulletText = (bulletIdx: number, value: string) => {
+    if (!activeLetter || !resolvedActiveContent) return;
+    const nextBullets = [...resolvedActiveContent.bulletTexts];
+    nextBullets[bulletIdx] = value;
+    updateActiveLetterField('bulletTexts', nextBullets);
+  };
+
+  const handleResetActiveLetter = () => {
+    if (!activeLetter) return;
+    setSavedNotice(false);
+    setSaveError(null);
+    setOverridesByKey(prev => {
+      const next = { ...prev };
+      delete next[activeLetterKey];
+      return next;
+    });
+  };
+
+  const handleSave = async () => {
+    if (!onSaveConfirmationTexts) return;
+    try {
+      setIsSaving(true);
+      setSaveError(null);
+      const cleaned: Record<string, PurchaseConfirmationLetterTextOverrides> = {};
+      for (const letter of letters) {
+        const key = getConfirmationLetterOverrideKey(letter);
+        const resolved = resolvePurchaseConfirmationLetterContent(letter, overridesByKey[key]);
+        const extracted = extractPurchaseConfirmationOverridesForSave(resolved, letter);
+        if (extracted) {
+          cleaned[key] = extracted;
+        }
+      }
+      await onSaveConfirmationTexts(
+        consultation.id,
+        Object.keys(cleaned).length > 0 ? cleaned : null
+      );
+      setSavedNotice(true);
+    } catch (err: any) {
+      setSaveError(err?.message || 'Erreur lors de la sauvegarde des textes.');
+    } finally {
+      setIsSaving(false);
+    }
+  };
+
   const handleDownloadAll = () => {
     downloadPurchaseConfirmationPdf(
       letters,
-      consultation.confirmationRef || consultation.consultationNumber
+      consultation.confirmationRef || consultation.consultationNumber,
+      overridesByKey,
+      consultation,
+      orders,
+      invoices
     );
   };
 
@@ -107,7 +237,11 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
     if (!activeLetter) return;
     downloadPurchaseConfirmationPdf(
       [activeLetter],
-      `${activeLetter.confirmationRef}_${activeLetter.recipientBankCode}`
+      `${activeLetter.confirmationRef}_${activeLetter.recipientBankCode}`,
+      overridesByKey,
+      consultation,
+      orders,
+      invoices
     );
   };
 
@@ -115,9 +249,15 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
     downloadPurchaseConfirmationRecapPdf(consultation, orders, banks);
   };
 
+  const showEditorPanel = isEditing && activeTab !== 'recap' && Boolean(activeLetter && resolvedActiveContent);
+
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/65 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:bg-white print:p-0">
-      <div className="bg-slate-100 rounded-2xl max-w-5xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh] print:shadow-none print:max-h-none print:bg-white">
+      <div
+        className={`bg-slate-100 rounded-2xl w-full shadow-2xl overflow-hidden flex flex-col max-h-[92vh] print:shadow-none print:max-h-none print:bg-white ${
+          showEditorPanel ? 'max-w-7xl' : 'max-w-5xl'
+        }`}
+      >
         {/* Top Modal Action Bar */}
         <div className="bg-slate-900 text-white px-6 py-4 flex flex-col lg:flex-row lg:items-center justify-between gap-3 shrink-0 print:hidden">
           <div className="flex items-center gap-3 min-w-0">
@@ -150,6 +290,20 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
           </div>
 
           <div className="flex items-center gap-2 shrink-0 flex-wrap">
+            {activeTab !== 'recap' && activeLetter && (
+              <button
+                type="button"
+                onClick={() => setIsEditing(prev => !prev)}
+                className={`inline-flex items-center gap-1.5 px-3 py-2 text-xs font-bold rounded-lg transition-colors border whitespace-nowrap ${
+                  isEditing
+                    ? 'bg-amber-500 hover:bg-amber-600 text-slate-950 border-amber-400'
+                    : 'bg-slate-800 hover:bg-slate-700 text-amber-300 border-amber-500/40'
+                }`}
+              >
+                <Pencil className="w-3.5 h-3.5" />
+                <span>{isEditing ? 'Masquer l’éditeur' : 'Modifier le texte'}</span>
+              </button>
+            )}
             {recap && (
               <button
                 type="button"
@@ -269,8 +423,185 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
           </div>
         )}
 
-        {/* Paper Sheet Preview */}
-        <div className="p-5 sm:p-6 overflow-y-auto flex-1 flex justify-center items-start print:p-0 print:overflow-visible">
+        {/* Paper Sheet Preview (+ Optional Side-by-Side Editor) */}
+        <div className="flex-1 min-h-0 flex flex-col lg:flex-row overflow-hidden print:overflow-visible">
+          {showEditorPanel && activeLetter && resolvedActiveContent && (
+            <div className="no-print w-full lg:w-[400px] shrink-0 bg-white border-b lg:border-b-0 lg:border-r border-slate-200 p-4 space-y-3 overflow-y-auto max-h-[38vh] lg:max-h-none">
+              <div className="flex items-center justify-between gap-2 pb-2 border-b border-slate-200">
+                <div>
+                  <h4 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                    Édition lettre · {activeLetter.recipientBankCode}
+                  </h4>
+                  <p className="text-[11px] text-slate-500">
+                    Modifiez le texte de cette page avant génération du PDF.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={handleResetActiveLetter}
+                  disabled={!hasCustomTextForActive}
+                  className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-semibold text-slate-600 hover:text-rose-700 bg-slate-50 border border-slate-300 rounded-md disabled:opacity-40"
+                >
+                  <RotateCcw className="w-3 h-3" />
+                  <span>Réinitialiser</span>
+                </button>
+              </div>
+
+              {saveError && (
+                <div className="p-2 rounded bg-rose-50 border border-rose-200 text-rose-700 text-[11px]">
+                  {saveError}
+                </div>
+              )}
+
+              <div className="grid grid-cols-2 gap-2">
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                    DEST
+                  </label>
+                  <input
+                    type="text"
+                    value={resolvedActiveContent.destLabel}
+                    onChange={e => updateActiveLetterField('destLabel', e.target.value)}
+                    className="w-full text-xs border border-slate-300 rounded px-2 py-1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                    FAX
+                  </label>
+                  <input
+                    type="text"
+                    value={resolvedActiveContent.faxLabel}
+                    onChange={e => updateActiveLetterField('faxLabel', e.target.value)}
+                    className="w-full text-xs border border-slate-300 rounded px-2 py-1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                    ADRESSE
+                  </label>
+                  <input
+                    type="text"
+                    value={resolvedActiveContent.addressLabel}
+                    onChange={e => updateActiveLetterField('addressLabel', e.target.value)}
+                    className="w-full text-xs border border-slate-300 rounded px-2 py-1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                    TEL
+                  </label>
+                  <input
+                    type="text"
+                    value={resolvedActiveContent.telLabel}
+                    onChange={e => updateActiveLetterField('telLabel', e.target.value)}
+                    className="w-full text-xs border border-slate-300 rounded px-2 py-1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                    DATE
+                  </label>
+                  <input
+                    type="text"
+                    value={resolvedActiveContent.dateText}
+                    onChange={e => updateActiveLetterField('dateText', e.target.value)}
+                    className="w-full text-xs font-mono border border-slate-300 rounded px-2 py-1"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                    Réf
+                  </label>
+                  <input
+                    type="text"
+                    value={resolvedActiveContent.confirmationRef}
+                    onChange={e => updateActiveLetterField('confirmationRef', e.target.value)}
+                    className="w-full text-xs font-mono border border-slate-300 rounded px-2 py-1"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                  Texte d’introduction
+                </label>
+                <textarea
+                  rows={2}
+                  value={resolvedActiveContent.introText}
+                  onChange={e => updateActiveLetterField('introText', e.target.value)}
+                  className="w-full text-xs border border-slate-300 rounded px-2 py-1.5"
+                />
+              </div>
+
+              <div className="space-y-2">
+                <label className="block text-[10px] font-semibold text-slate-600">
+                  Détail des opérations ({resolvedActiveContent.bulletTexts.length})
+                </label>
+                {resolvedActiveContent.bulletTexts.map((bTxt, bIdx) => (
+                  <textarea
+                    key={activeLetter.lines[bIdx]?.orderId || bIdx}
+                    rows={3}
+                    value={bTxt}
+                    onChange={e => updateActiveBulletText(bIdx, e.target.value)}
+                    className="w-full text-xs border border-slate-300 rounded px-2 py-1.5 leading-relaxed"
+                  />
+                ))}
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                  Paragraphe d’instruction / clôture BCT
+                </label>
+                <textarea
+                  rows={3}
+                  value={resolvedActiveContent.closingText}
+                  onChange={e => updateActiveLetterField('closingText', e.target.value)}
+                  placeholder="Texte complémentaire ou instruction BCT (optionnel)..."
+                  className="w-full text-xs border border-slate-300 rounded px-2 py-1.5 leading-relaxed"
+                />
+              </div>
+
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-600 mb-0.5">
+                  Signataire
+                </label>
+                <input
+                  type="text"
+                  value={resolvedActiveContent.signatureLabel}
+                  onChange={e => updateActiveLetterField('signatureLabel', e.target.value)}
+                  className="w-full text-xs font-semibold border border-slate-300 rounded px-2 py-1"
+                />
+              </div>
+
+              {canSave && onSaveConfirmationTexts && (
+                <button
+                  type="button"
+                  disabled={isSaving}
+                  onClick={handleSave}
+                  className="w-full py-2 px-3 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-60 text-white rounded-lg text-xs font-bold flex items-center justify-center gap-1.5 shadow-2xs"
+                >
+                  {savedNotice ? (
+                    <>
+                      <Check className="w-3.5 h-3.5" />
+                      <span>Textes enregistrés</span>
+                    </>
+                  ) : (
+                    <>
+                      <Save className="w-3.5 h-3.5" />
+                      <span>
+                        {isSaving
+                          ? 'Enregistrement...'
+                          : `Enregistrer les modifications${hasAnyCustomText ? '' : ' (réinitialisé)'}`}
+                      </span>
+                    </>
+                  )}
+                </button>
+              )}
+            </div>
+          )}
+
+          <div className="p-5 sm:p-6 overflow-y-auto flex-1 flex justify-center items-start print:p-0 print:overflow-visible">
           {activeTab === 'recap' && recap ? (
             <div className="bg-white w-full max-w-[780px] shadow-md border border-slate-200 px-8 py-7 text-slate-900 space-y-5 print:shadow-none print:border-0">
               {/* MTK Official Recap Header Banner */}
@@ -536,7 +867,7 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
                 ))}
               </div>
             </div>
-          ) : activeLetter ? (
+          ) : activeLetter && resolvedActiveContent ? (
             <div
               className="bg-white w-full max-w-[780px] shadow-md border border-slate-200 px-10 py-7 text-slate-900 print:shadow-none print:border-0"
               style={{ fontFamily: 'Georgia, "Times New Roman", Times, serif' }}
@@ -563,101 +894,133 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
                 <tbody>
                   <tr>
                     <td className="border border-slate-700 px-2 py-1.5 w-24">DEST :</td>
-                    <td className="border border-slate-700 px-2 py-1.5">{activeLetter.destLabel}</td>
+                    <td className="border border-slate-700 px-2 py-1.5">
+                      {resolvedActiveContent.destLabel}
+                    </td>
                     <td className="border border-slate-700 px-2 py-1.5 w-16">FAX :</td>
-                    <td className="border border-slate-700 px-2 py-1.5 w-36">{activeLetter.faxLabel}</td>
+                    <td className="border border-slate-700 px-2 py-1.5 w-36">
+                      {resolvedActiveContent.faxLabel}
+                    </td>
                   </tr>
                   <tr>
                     <td className="border border-slate-700 px-2 py-1.5">ADRESSE :</td>
                     <td
                       className={`border border-slate-700 px-2 py-1.5 ${
-                        activeLetter.addressLabel.includes('@') ? 'text-blue-700 underline' : ''
+                        resolvedActiveContent.addressLabel.includes('@')
+                          ? 'text-blue-700 underline'
+                          : ''
                       }`}
                     >
-                      {activeLetter.addressLabel}
+                      {resolvedActiveContent.addressLabel}
                     </td>
                     <td className="border border-slate-700 px-2 py-1.5">
-                      {activeLetter.telLabel ? 'TEL :' : ''}
+                      {resolvedActiveContent.telLabel ? 'TEL :' : ''}
                     </td>
                     <td className="border border-slate-700 px-2 py-1.5">
-                      {activeLetter.telLabel || ''}
+                      {resolvedActiveContent.telLabel}
                     </td>
                   </tr>
                   <tr>
                     <td className="border border-slate-700 px-2 py-1.5">DATE :</td>
                     <td className="border border-slate-700 px-2 py-1.5">
-                      {formatConsultationDate(activeLetter.confirmationDate)}
+                      {resolvedActiveContent.dateText}
                     </td>
                     <td className="border border-slate-700 px-2 py-1.5">Réf :</td>
-                    <td className="border border-slate-700 px-2 py-1.5">{activeLetter.confirmationRef}</td>
+                    <td className="border border-slate-700 px-2 py-1.5">
+                      {resolvedActiveContent.confirmationRef}
+                    </td>
                   </tr>
                 </tbody>
               </table>
 
               {/* Second Pale-Yellow Expediteur Box */}
               <div className="mx-3 mt-3 border border-slate-700 bg-[#f4f6c8] text-center px-3 py-1.5 italic font-bold text-[11px]">
-                <div>EXPEDITEUR : DIRECTION FINANCIERE</div>
-                <div>
-                  N.B. : En cas d’illisibilité du message, Veuillez nous contacter au (77) 281.309
-                </div>
+                <div>{resolvedActiveContent.senderBoxTitle}</div>
+                <div>{resolvedActiveContent.senderBoxNb}</div>
               </div>
 
               {/* TEXTE Heading */}
               <div className="text-center font-bold italic text-sm tracking-wider mt-6 mb-5">
-                TEXTE
+                {resolvedActiveContent.sectionTitle}
               </div>
 
               {/* Body */}
               <div className="space-y-4 text-[14.5px] leading-relaxed italic">
                 <p>
-                  <RenderRichText segments={buildLetterIntroSegments(activeLetter)} />
+                  {resolvedActiveContent.isIntroCustom ? (
+                    <span className="whitespace-pre-line">{resolvedActiveContent.introText}</span>
+                  ) : (
+                    <RenderRichText segments={buildLetterIntroSegments(activeLetter)} />
+                  )}
                 </p>
 
                 <ul className="space-y-3 pl-5">
-                  {activeLetter.lines.map((line: PurchaseConfirmationOrderLine) => (
+                  {activeLetter.lines.map((line: PurchaseConfirmationOrderLine, idx: number) => (
                     <li key={line.orderId} className="flex items-start gap-2.5">
                       <span>-</span>
                       <span>
-                        <RenderRichText segments={buildOrderBulletSegments(line)} />
+                        {resolvedActiveContent.isBulletCustom[idx] ? (
+                          <span className="whitespace-pre-line">
+                            {resolvedActiveContent.bulletTexts[idx]}
+                          </span>
+                        ) : (
+                          <RenderRichText segments={buildOrderBulletSegments(line)} />
+                        )}
                       </span>
                     </li>
                   ))}
                 </ul>
 
-                {(() => {
-                  const closing = buildLetterClosingSegments(activeLetter);
-                  if (!closing) return null;
-                  return (
-                    <p className="pt-1">
-                      <RenderRichText segments={closing} />
-                    </p>
-                  );
-                })()}
+                {resolvedActiveContent.isClosingCustom ? (
+                  resolvedActiveContent.closingText.trim() ? (
+                    <p className="pt-1 whitespace-pre-line">{resolvedActiveContent.closingText}</p>
+                  ) : null
+                ) : (
+                  (() => {
+                    const closing = buildLetterClosingSegments(activeLetter);
+                    if (!closing) return null;
+                    return (
+                      <p className="pt-1">
+                        <RenderRichText segments={closing} />
+                      </p>
+                    );
+                  })()
+                )}
 
                 <div className="pt-6 text-right font-bold italic text-sm">
-                  LA DIRECTION FINANCIERE
+                  {resolvedActiveContent.signatureLabel}
                 </div>
               </div>
 
-              {/* Bottom-left Concerned Persons & Emails */}
-              <div className="mt-10 space-y-1.5 text-xs font-sans">
-                {((activeLetter.footerContacts && activeLetter.footerContacts.length > 0
-                  ? activeLetter.footerContacts
-                  : activeLetter.footerEmails.map(email => ({ name: '', email }))) as BankConfirmationContact[]
-                ).map((c, idx) => (
-                  <div key={c.id || `${c.email}_${idx}`} className="flex flex-wrap items-baseline gap-1.5">
-                    <span className="font-mono text-[10px] font-bold text-blue-800 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
-                      [{formatContactOrderTypesTag(c.orderTypes)}]
-                    </span>
-                    {c.name && (
-                      <span className="font-semibold text-slate-800">
-                        {c.name}
-                        {c.role ? ` (${c.role})` : ''} :
+              {/* Bottom-left Concerned Persons & Emails + Bottom-right Verification QR Code */}
+              <div className="mt-10 flex items-end justify-between gap-6">
+                <div className="space-y-1.5 text-xs font-sans flex-1 min-w-0">
+                  {((activeLetter.footerContacts && activeLetter.footerContacts.length > 0
+                    ? activeLetter.footerContacts
+                    : activeLetter.footerEmails.map(email => ({ name: '', email }))) as BankConfirmationContact[]
+                  ).map((c, idx) => (
+                    <div key={c.id || `${c.email}_${idx}`} className="flex flex-wrap items-baseline gap-1.5">
+                      <span className="font-mono text-[10px] font-bold text-blue-800 bg-blue-50 border border-blue-200 px-1.5 py-0.5 rounded">
+                        [{formatContactOrderTypesTag(c.orderTypes)}]
                       </span>
-                    )}
-                    <span className="text-blue-700 underline">{c.email}</span>
-                  </div>
-                ))}
+                      {c.name && (
+                        <span className="font-semibold text-slate-800">
+                          {c.name}
+                          {c.role ? ` (${c.role})` : ''} :
+                        </span>
+                      )}
+                      <span className="text-blue-700 underline">{c.email}</span>
+                    </div>
+                  ))}
+                </div>
+                {activeQrPayload && (
+                  <QrCodeSvg
+                    value={activeQrPayload}
+                    sizePx={90}
+                    caption="Vérification QR"
+                    className="shrink-0"
+                  />
+                )}
               </div>
             </div>
           ) : (
@@ -665,6 +1028,7 @@ export const PurchaseConfirmationPdfModal: React.FC<PurchaseConfirmationPdfModal
               Aucune lettre de confirmation disponible pour cette consultation.
             </div>
           )}
+          </div>
         </div>
       </div>
     </div>

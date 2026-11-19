@@ -3,6 +3,8 @@ import assert from 'node:assert/strict';
 import {
   computeInvoiceAxisMetrics,
   computeConsultationAxisMetrics,
+  computeDashboardStatsFromOrders,
+  filterOrders,
 } from './dashboardMetrics';
 import { CurrencyConsultation, Invoice, PaymentOrder } from '../types/payment';
 
@@ -247,3 +249,18 @@ test('computeConsultationAxisMetrics computes open/closed counts, savings, pendi
   assert.equal(metrics.bankAwards[0].bankName, 'Banque Internationale Arabe de Tunisie');
   assert.equal(metrics.bankAwards[0].winsCount, 1);
 });
+
+test('filterOrders and computeDashboardStatsFromOrders filter and aggregate order KPIs accurately', () => {
+  const usdOrders = filterOrders(sampleOrders, { currency: 'USD', fiscalYear: 2026 });
+  assert.equal(usdOrders.length, 2);
+
+  const stats = computeDashboardStatsFromOrders(sampleOrders);
+  assert.equal(stats.totalOrders, 3);
+  assert.equal(stats.totalUsdAmount, 65000);
+  assert.equal(stats.totalEurAmount, 50000);
+  assert.equal(stats.executedCount, 1);
+  assert.equal(stats.pendingExchangeCount, 2);
+  assert.equal(stats.ordersByBank['STB']?.count, 2);
+  assert.equal(stats.ordersByBank['BIAT']?.count, 1);
+});
+

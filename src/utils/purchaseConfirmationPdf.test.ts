@@ -7,6 +7,9 @@ import {
   computeDefaultValueDate,
   normalizeBankConfirmationContacts,
   getBankDeskInfo,
+  getConfirmationLetterOverrideKey,
+  resolvePurchaseConfirmationLetterContent,
+  extractPurchaseConfirmationOverridesForSave,
 } from './purchaseConfirmationPdf';
 import { Bank, CurrencyConsultation, PaymentOrder } from '../types/payment';
 
@@ -353,5 +356,61 @@ test('Contacts are filtered by order transferType (LC, VIREMENT, REMISE, AUTRE) 
 
   const pdfBytes = buildPurchaseConfirmationPdfDocument(lcLetters).output('arraybuffer');
   assert.ok(pdfBytes.byteLength > 1500);
+});
+
+test('Purchase confirmation letters support customConfirmationTexts overrides and PDF generation', () => {
+  const key = getConfirmationLetterOverrideKey({
+    role: 'SAME_BANK_PURCHASE',
+    recipientBankId: 'bank_bna',
+  });
+  assert.equal(key, 'SAME_BANK_PURCHASE_bank_bna');
+
+  const consultation: CurrencyConsultation = {
+    id: 'cons_custom_text',
+    consultationNumber: 'CONS-2026-0300',
+    createdAt: '2026-11-14T09:00:00Z',
+    createdBy: 'Monia Ben Salem',
+    createdById: 'usr_agent1',
+    orderIds: ['ord_bna'],
+    orderNumbers: ['OP-2026-0010'],
+    currency: 'USD',
+    totalAmount: 39000,
+    operationDate: '2026-11-14',
+    purchaseType: 'au comptant',
+    submissionDeadlineTime: '14h20',
+    validityDeadlineTime: '14h30',
+    status: 'CLOTUREE',
+    selectedBankId: 'bank_bna',
+    selectedBankName: 'Banque Nationale Agricole',
+    negotiatedRate: 3.034,
+    confirmationRef: '300/26',
+    confirmationDate: '2026-11-14',
+    valueDate: '2026-11-18',
+    customConfirmationTexts: {
+      [key]: {
+        introText: 'Suite à notre accord téléphonique, nous confirmons :',
+        bulletTexts: ['39 000.00 USD au cours convenu de 3.0340 pour LC N° CDI30279/014/26.'],
+        signatureLabel: 'LE DIRECTEUR FINANCIER',
+      },
+    },
+    isDemo: true,
+  };
+
+  const letters = buildPurchaseConfirmations(consultation, [ORDER_BNA], TEST_BANKS);
+  assert.equal(letters.length, 1);
+  assert.ok(letters[0].textOverrides);
+
+  const resolved = resolvePurchaseConfirmationLetterContent(letters[0]);
+  assert.equal(resolved.isIntroCustom, true);
+  assert.equal(resolved.introText, 'Suite à notre accord téléphonique, nous confirmons :');
+  assert.deepEqual(resolved.isBulletCustom, [true]);
+  assert.equal(resolved.signatureLabel, 'LE DIRECTEUR FINANCIER');
+
+  const extracted = extractPurchaseConfirmationOverridesForSave(resolved, letters[0]);
+  assert.deepEqual(extracted, consultation.customConfirmationTexts?.[key]);
+
+  const pdfBytes = buildPurchaseConfirmationPdfDocument(letters).output('arraybuffer');
+  const header = new TextDecoder().decode(new Uint8Array(pdfBytes).slice(0, 5));
+  assert.equal(header, '%PDF-');
 });
 

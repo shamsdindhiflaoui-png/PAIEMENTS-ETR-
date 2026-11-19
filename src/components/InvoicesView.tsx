@@ -44,6 +44,7 @@ import { downloadTablePdf } from '../utils/tablePdf';
 import { canUserManageInvoice, isAdministrator } from '../utils/adminRules';
 import { AdminEditInvoiceModal } from './AdminEditInvoiceModal';
 import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
+import { api } from '../services/api';
 
 interface InvoicesViewProps {
   invoices: Invoice[];
@@ -947,21 +948,21 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
             <div className="flex flex-wrap gap-2.5">
               {invoice.documents.map(doc => (
                 <div
-                  key={doc.id}
+                  key={doc.id || `${doc.name}-${doc.uploadedAt}`}
                   className="inline-flex items-center gap-2.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs"
                 >
                   <FileText className="w-4 h-4 text-blue-600 shrink-0" />
                   <span className="font-medium text-slate-800">{doc.name}</span>
-                  {doc.dataBase64 && (
-                    <a
-                      href={doc.dataBase64}
-                      download={doc.name}
-                      className="text-blue-700 hover:text-blue-900 inline-flex items-center gap-1 font-semibold"
-                    >
-                      <Download className="w-3.5 h-3.5" />
-                      <span>Télécharger</span>
-                    </a>
-                  )}
+                  <button
+                    type="button"
+                    onClick={() => {
+                      api.downloadInvoiceDocument(invoice.id, doc).catch(() => {});
+                    }}
+                    className="text-blue-700 hover:text-blue-900 inline-flex items-center gap-1 font-semibold"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span>Télécharger</span>
+                  </button>
                 </div>
               ))}
             </div>

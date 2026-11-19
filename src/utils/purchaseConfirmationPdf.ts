@@ -3,12 +3,15 @@ import {
   Bank,
   BankConfirmationContact,
   CurrencyConsultation,
+  Invoice,
   OrderTransferType,
   PaymentOrder,
   PurchaseConfirmationLetter,
+  PurchaseConfirmationLetterTextOverrides,
   PurchaseConfirmationOrderLine,
 } from '../types/payment';
 import { formatConsultationAmount, formatConsultationDate } from './consultationPdf';
+import { buildPurchaseConfirmationQrPayload, renderQrCodeToJsPdf } from './consultationQr';
 
 export const ALL_ORDER_TRANSFER_TYPES: OrderTransferType[] = ['LC', 'VIREMENT', 'REMISE', 'AUTRE'];
 
@@ -421,6 +424,10 @@ export function buildPurchaseConfirmations(
     const matchingContacts = purchaseDesk.confirmationContacts.filter(c =>
       doesContactMatchOrderTypes(c, allLineTypes)
     );
+    const sameKey = getConfirmationLetterOverrideKey({
+      role: 'SAME_BANK_PURCHASE',
+      recipientBankId: purchaseBankId,
+    });
     return [
       {
         id: `${consultation.id}_same_${purchaseBankId}`,
@@ -442,6 +449,9 @@ export function buildPurchaseConfirmations(
         totalCounterValueTnd: totalAllTnd,
         footerEmails: matchingContacts.map(c => c.email),
         footerContacts: matchingContacts,
+        ...(consultation.customConfirmationTexts?.[sameKey]
+          ? { textOverrides: consultation.customConfirmationTexts[sameKey] }
+          : {}),
       },
     ];
   }
@@ -463,6 +473,10 @@ export function buildPurchaseConfirmations(
       allOtherDomContacts.push(c);
     });
 
+    const domKey = getConfirmationLetterOverrideKey({
+      role: 'DOMICILIARY_BANK',
+      recipientBankId: group.bankId,
+    });
     letters.push({
       id: `${consultation.id}_dom_${group.bankId}`,
       role: 'DOMICILIARY_BANK',
@@ -483,6 +497,9 @@ export function buildPurchaseConfirmations(
       totalCounterValueTnd: group.totalTnd,
       footerEmails: matchingGroupContacts.map(c => c.email),
       footerContacts: matchingGroupContacts,
+      ...(consultation.customConfirmationTexts?.[domKey]
+        ? { textOverrides: consultation.customConfirmationTexts[domKey] }
+        : {}),
     });
   }
 
@@ -495,6 +512,10 @@ export function buildPurchaseConfirmations(
     ...allOtherDomContacts,
   ]);
   const purchaseFooterEmails = purchaseFooterContacts.map(c => c.email);
+  const purchaseKey = getConfirmationLetterOverrideKey({
+    role: 'PURCHASE_BANK',
+    recipientBankId: purchaseBankId,
+  });
 
   letters.push({
     id: `${consultation.id}_purchase_${purchaseBankId}`,
@@ -518,6 +539,9 @@ export function buildPurchaseConfirmations(
     bctTransferCounterValueTnd: otherDomTotalTnd,
     footerEmails: purchaseFooterEmails,
     footerContacts: purchaseFooterContacts,
+    ...(consultation.customConfirmationTexts?.[purchaseKey]
+      ? { textOverrides: consultation.customConfirmationTexts[purchaseKey] }
+      : {}),
   });
 
   return letters;
@@ -628,11 +652,170 @@ export function buildLetterClosingSegments(letter: PurchaseConfirmationLetter): 
   return null;
 }
 
+export function getConfirmationLetterOverrideKey(
+  letter: Pick<PurchaseConfirmationLetter, 'role' | 'recipientBankId'>
+): string {
+  return `${letter.role}_${letter.recipientBankId}`;
+}
+
+export function segmentsToPlainText(segments: RichSegment[]): string {
+  return segments.map(s => s.text).join('');
+}
+
+export interface ResolvedPurchaseConfirmationContent {
+  destLabel: string;
+  addressLabel: string;
+  faxLabel: string;
+  telLabel: string;
+  dateText: string;
+  confirmationRef: string;
+  senderBoxTitle: string;
+  senderBoxNb: string;
+  sectionTitle: string;
+  introText: string;
+  isIntroCustom: boolean;
+  bulletTexts: string[];
+  isBulletCustom: boolean[];
+  closingText: string;
+  isClosingCustom: boolean;
+  signatureLabel: string;
+}
+
+export function getDefaultPurchaseConfirmationLetterContent(
+  letter: PurchaseConfirmationLetter
+): ResolvedPurchaseConfirmationContent {
+  const closingSegs = buildLetterClosingSegments(letter);
+  return {
+    destLabel: letter.destLabel,
+    addressLabel: letter.addressLabel,
+    faxLabel: letter.faxLabel,
+    telLabel: letter.telLabel || '',
+    dateText: formatConsultationDate(letter.confirmationDate),
+    confirmationRef: letter.confirmationRef,
+    senderBoxTitle: 'EXPEDITEUR : DIRECTION FINANCIERE',
+    senderBoxNb:
+      "N.B. : En cas d'illisibilité du message, Veuillez nous contacter au (77) 281.309",
+    sectionTitle: 'TEXTE',
+    introText: segmentsToPlainText(buildLetterIntroSegments(letter)),
+    isIntroCustom: false,
+    bulletTexts: letter.lines.map(line => segmentsToPlainText(buildOrderBulletSegments(line))),
+    isBulletCustom: letter.lines.map(() => false),
+    closingText: closingSegs ? segmentsToPlainText(closingSegs) : '',
+    isClosingCustom: false,
+    signatureLabel: 'LA DIRECTION FINANCIERE',
+  };
+}
+
+export function resolvePurchaseConfirmationLetterContent(
+  letter: PurchaseConfirmationLetter,
+  overrides?: PurchaseConfirmationLetterTextOverrides
+): ResolvedPurchaseConfirmationContent {
+  const defaults = getDefaultPurchaseConfirmationLetterContent(letter);
+  const effective = overrides !== undefined ? overrides : letter.textOverrides;
+  const pick = (customVal: string | undefined, defaultVal: string): string =>
+    customVal !== undefined ? customVal : defaultVal;
+
+  const introText = pick(effective?.introText, defaults.introText);
+  const bulletTexts = defaults.bulletTexts.map((defBullet, idx) =>
+    effective?.bulletTexts?.[idx] !== undefined ? effective.bulletTexts[idx] : defBullet
+  );
+  const closingText = pick(effective?.closingText, defaults.closingText);
+
+  return {
+    destLabel: pick(effective?.destLabel, defaults.destLabel),
+    addressLabel: pick(effective?.addressLabel, defaults.addressLabel),
+    faxLabel: pick(effective?.faxLabel, defaults.faxLabel),
+    telLabel: pick(effective?.telLabel, defaults.telLabel),
+    dateText: pick(effective?.dateText, defaults.dateText),
+    confirmationRef: pick(effective?.confirmationRef, defaults.confirmationRef),
+    senderBoxTitle: pick(effective?.senderBoxTitle, defaults.senderBoxTitle),
+    senderBoxNb: pick(effective?.senderBoxNb, defaults.senderBoxNb),
+    sectionTitle: pick(effective?.sectionTitle, defaults.sectionTitle),
+    introText,
+    isIntroCustom: effective?.introText !== undefined && effective.introText !== defaults.introText,
+    bulletTexts,
+    isBulletCustom: defaults.bulletTexts.map(
+      (defBullet, idx) =>
+        effective?.bulletTexts?.[idx] !== undefined && effective.bulletTexts[idx] !== defBullet
+    ),
+    closingText,
+    isClosingCustom:
+      effective?.closingText !== undefined && effective.closingText !== defaults.closingText,
+    signatureLabel: pick(effective?.signatureLabel, defaults.signatureLabel),
+  };
+}
+
+export function extractPurchaseConfirmationOverridesForSave(
+  content: ResolvedPurchaseConfirmationContent,
+  letter: PurchaseConfirmationLetter
+): PurchaseConfirmationLetterTextOverrides | undefined {
+  const defaults = getDefaultPurchaseConfirmationLetterContent(letter);
+  const result: PurchaseConfirmationLetterTextOverrides = {};
+
+  const scalarKeys: Array<
+    Exclude<keyof PurchaseConfirmationLetterTextOverrides, 'bulletTexts'>
+  > = [
+    'destLabel',
+    'addressLabel',
+    'faxLabel',
+    'telLabel',
+    'dateText',
+    'confirmationRef',
+    'senderBoxTitle',
+    'senderBoxNb',
+    'sectionTitle',
+    'introText',
+    'closingText',
+    'signatureLabel',
+  ];
+
+  for (const key of scalarKeys) {
+    if (content[key] !== defaults[key]) {
+      result[key] = content[key];
+    }
+  }
+
+  const bulletsChanged = content.bulletTexts.some((txt, idx) => txt !== defaults.bulletTexts[idx]);
+  if (bulletsChanged) {
+    result.bulletTexts = [...content.bulletTexts];
+  }
+
+  return Object.keys(result).length > 0 ? result : undefined;
+}
+
 function pdfSafeText(str: string): string {
   return (str || '')
     .replace(/[\u2018\u2019]/g, "'")
     .replace(/[\u2013\u2014]/g, '-')
     .replace(/\u00a0/g, ' ');
+}
+
+function renderMultilineItalicText(
+  doc: jsPDF,
+  text: string,
+  startX: number,
+  startY: number,
+  maxWidth: number,
+  lineHeight: number,
+  fontSize = 11.5
+): number {
+  doc.setFont('times', 'italic');
+  doc.setFontSize(fontSize);
+  doc.setTextColor(15, 15, 15);
+  const paragraphs = pdfSafeText(text).split(/\r?\n/);
+  let y = startY;
+  for (const para of paragraphs) {
+    if (!para.trim()) {
+      y += lineHeight * 0.7;
+      continue;
+    }
+    const wrapped = doc.splitTextToSize(para, maxWidth) as string[];
+    for (const line of wrapped) {
+      doc.text(line, startX, y);
+      y += lineHeight;
+    }
+  }
+  return y;
 }
 
 function renderRichParagraph(
@@ -726,7 +909,15 @@ function renderRichParagraph(
   return y;
 }
 
-function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLetter): void {
+function renderSingleConfirmationPage(
+  doc: jsPDF,
+  letter: PurchaseConfirmationLetter,
+  overrides?: PurchaseConfirmationLetterTextOverrides,
+  consultation?: CurrencyConsultation,
+  orders: PaymentOrder[] = [],
+  invoices: Invoice[] = []
+): void {
+  const content = resolvePurchaseConfirmationLetterContent(letter, overrides);
   const pageWidth = 210;
   const marginX = 28;
   const contentWidth = pageWidth - marginX * 2; // 154 mm
@@ -770,7 +961,6 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
   const c1W = 28;
   const c2W = 68;
   const c3W = 16;
-  const c4W = contentWidth - c1W - c2W - c3W;
 
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.3);
@@ -788,19 +978,19 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
   doc.text('ADRESSE :', marginX + 2, tableY + rowH + 4.8);
   doc.text('DATE :', marginX + 2, tableY + rowH * 2 + 4.8);
 
-  doc.text(pdfSafeText(letter.destLabel), marginX + c1W + 2, tableY + 4.8);
-  doc.text(pdfSafeText(letter.addressLabel), marginX + c1W + 2, tableY + rowH + 4.8);
-  doc.text(pdfSafeText(formatConsultationDate(letter.confirmationDate)), marginX + c1W + 2, tableY + rowH * 2 + 4.8);
+  doc.text(pdfSafeText(content.destLabel), marginX + c1W + 2, tableY + 4.8);
+  doc.text(pdfSafeText(content.addressLabel), marginX + c1W + 2, tableY + rowH + 4.8);
+  doc.text(pdfSafeText(content.dateText), marginX + c1W + 2, tableY + rowH * 2 + 4.8);
 
   doc.text('FAX :', marginX + c1W + c2W + 2, tableY + 4.8);
-  doc.text(letter.telLabel ? 'TEL :' : '', marginX + c1W + c2W + 2, tableY + rowH + 4.8);
+  doc.text(content.telLabel ? 'TEL :' : '', marginX + c1W + c2W + 2, tableY + rowH + 4.8);
   doc.text('Réf :', marginX + c1W + c2W + 2, tableY + rowH * 2 + 4.8);
 
-  doc.text(pdfSafeText(letter.faxLabel), marginX + c1W + c2W + c3W + 2, tableY + 4.8);
-  if (letter.telLabel) {
-    doc.text(pdfSafeText(letter.telLabel), marginX + c1W + c2W + c3W + 2, tableY + rowH + 4.8);
+  doc.text(pdfSafeText(content.faxLabel), marginX + c1W + c2W + c3W + 2, tableY + 4.8);
+  if (content.telLabel) {
+    doc.text(pdfSafeText(content.telLabel), marginX + c1W + c2W + c3W + 2, tableY + rowH + 4.8);
   }
-  doc.text(pdfSafeText(letter.confirmationRef), marginX + c1W + c2W + c3W + 2, tableY + rowH * 2 + 4.8);
+  doc.text(pdfSafeText(content.confirmationRef), marginX + c1W + c2W + c3W + 2, tableY + rowH * 2 + 4.8);
 
   // 3. Second Expediteur Box
   const expY = tableY + rowH * 3 + 4;
@@ -813,57 +1003,31 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
   doc.setFont('times', 'bolditalic');
   doc.setFontSize(8.5);
   doc.setTextColor(0, 0, 0);
-  doc.text('EXPEDITEUR : DIRECTION FINANCIERE', pageWidth / 2, expY + 4.2, { align: 'center' });
-  doc.text(
-    "N.B. : En cas d'illisibilité du message, Veuillez nous contacter au (77) 281.309",
-    pageWidth / 2,
-    expY + 8.4,
-    { align: 'center' }
-  );
+  doc.text(pdfSafeText(content.senderBoxTitle), pageWidth / 2, expY + 4.2, { align: 'center' });
+  doc.text(pdfSafeText(content.senderBoxNb), pageWidth / 2, expY + 8.4, { align: 'center' });
 
   // 4. TEXTE heading
   let cursorY = expY + expH + 10;
   doc.setFont('times', 'bolditalic');
   doc.setFontSize(12);
-  doc.text('TEXTE', pageWidth / 2, cursorY, { align: 'center' });
+  doc.text(pdfSafeText(content.sectionTitle), pageWidth / 2, cursorY, { align: 'center' });
   cursorY += 9;
 
   // 5. Intro sentence
-  cursorY = renderRichParagraph(
-    doc,
-    buildLetterIntroSegments(letter),
-    marginX,
-    cursorY,
-    contentWidth,
-    6,
-    11.5
-  );
-  cursorY += 4;
-
-  // 6. Order bullets
-  for (const line of letter.lines) {
-    doc.setFont('times', 'italic');
-    doc.setFontSize(11.5);
-    doc.text('-', marginX + 4, cursorY);
-    cursorY = renderRichParagraph(
+  if (content.isIntroCustom) {
+    cursorY = renderMultilineItalicText(
       doc,
-      buildOrderBulletSegments(line),
-      marginX + 10,
+      content.introText,
+      marginX,
       cursorY,
-      contentWidth - 10,
-      5.8,
+      contentWidth,
+      6,
       11.5
     );
-    cursorY += 3;
-  }
-
-  // 7. Closing BCT instruction (when applicable)
-  const closingSegments = buildLetterClosingSegments(letter);
-  if (closingSegments) {
-    cursorY += 1;
+  } else {
     cursorY = renderRichParagraph(
       doc,
-      closingSegments,
+      buildLetterIntroSegments(letter),
       marginX,
       cursorY,
       contentWidth,
@@ -871,14 +1035,76 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
       11.5
     );
   }
+  cursorY += 4;
+
+  // 6. Order bullets
+  letter.lines.forEach((line, idx) => {
+    doc.setFont('times', 'italic');
+    doc.setFontSize(11.5);
+    doc.text('-', marginX + 4, cursorY);
+    if (content.isBulletCustom[idx]) {
+      cursorY = renderMultilineItalicText(
+        doc,
+        content.bulletTexts[idx] || '',
+        marginX + 10,
+        cursorY,
+        contentWidth - 10,
+        5.8,
+        11.5
+      );
+    } else {
+      cursorY = renderRichParagraph(
+        doc,
+        buildOrderBulletSegments(line),
+        marginX + 10,
+        cursorY,
+        contentWidth - 10,
+        5.8,
+        11.5
+      );
+    }
+    cursorY += 3;
+  });
+
+  // 7. Closing BCT instruction (when applicable or customized)
+  if (content.isClosingCustom) {
+    if (content.closingText.trim()) {
+      cursorY += 1;
+      cursorY = renderMultilineItalicText(
+        doc,
+        content.closingText,
+        marginX,
+        cursorY,
+        contentWidth,
+        6,
+        11.5
+      );
+    }
+  } else {
+    const closingSegments = buildLetterClosingSegments(letter);
+    if (closingSegments) {
+      cursorY += 1;
+      cursorY = renderRichParagraph(
+        doc,
+        closingSegments,
+        marginX,
+        cursorY,
+        contentWidth,
+        6,
+        11.5
+      );
+    }
+  }
 
   // 8. Signature right-aligned
   cursorY += 10;
   doc.setFont('times', 'bolditalic');
   doc.setFontSize(12);
-  doc.text('LA DIRECTION FINANCIERE', marginX + contentWidth, cursorY, { align: 'right' });
+  doc.text(pdfSafeText(content.signatureLabel), marginX + contentWidth, cursorY, {
+    align: 'right',
+  });
 
-  // 9. Footer concerned persons & contact emails bottom-left (blue underlined)
+  // 9. Footer concerned persons & contact emails bottom-left
   const footerContacts: BankConfirmationContact[] =
     letter.footerContacts && letter.footerContacts.length > 0
       ? letter.footerContacts
@@ -919,9 +1145,48 @@ function renderSingleConfirmationPage(doc: jsPDF, letter: PurchaseConfirmationLe
     emailY += lineStep;
   }
   doc.setTextColor(0, 0, 0);
+
+  // 10. Bottom-right Verification QR Code (Order ref, Invoice, Payment type & Amount details)
+  const fallbackConsultation: CurrencyConsultation = consultation || {
+    id: letter.id,
+    consultationNumber: letter.confirmationRef,
+    createdAt: letter.confirmationDate,
+    createdBy: 'MTK',
+    createdById: 'mtk',
+    orderIds: letter.lines.map(l => l.orderId),
+    orderNumbers: letter.lines.map(l => l.orderNumber),
+    currency: (letter.lines[0]?.currency as CurrencyConsultation['currency']) || 'EUR',
+    totalAmount: letter.lines.reduce((sum, l) => sum + (Number(l.amount) || 0), 0),
+    operationDate: letter.confirmationDate,
+    purchaseType: 'au comptant',
+    submissionDeadlineTime: '14h20',
+    validityDeadlineTime: '14h30',
+    status: 'CLOTUREE',
+    negotiatedRate: letter.lines[0]?.rate,
+    confirmationRef: letter.confirmationRef,
+    confirmationDate: letter.confirmationDate,
+    valueDate: letter.valueDate,
+    isDemo: false,
+  };
+  const qrSize = 23;
+  const qrX = marginX + contentWidth - qrSize;
+  const qrY = Math.min(262, Math.max(cursorY + 18, 258));
+  const qrPayload = buildPurchaseConfirmationQrPayload(
+    letter,
+    fallbackConsultation,
+    orders,
+    invoices
+  );
+  renderQrCodeToJsPdf(doc, qrPayload, qrX, qrY, qrSize, 'Verification QR');
 }
 
-export function buildPurchaseConfirmationPdfDocument(letters: PurchaseConfirmationLetter[]): jsPDF {
+export function buildPurchaseConfirmationPdfDocument(
+  letters: PurchaseConfirmationLetter[],
+  overridesByKey?: Record<string, PurchaseConfirmationLetterTextOverrides>,
+  consultation?: CurrencyConsultation,
+  orders: PaymentOrder[] = [],
+  invoices: Invoice[] = []
+): jsPDF {
   const doc = new jsPDF({
     orientation: 'portrait',
     unit: 'mm',
@@ -932,7 +1197,10 @@ export function buildPurchaseConfirmationPdfDocument(letters: PurchaseConfirmati
     if (idx > 0) {
       doc.addPage();
     }
-    renderSingleConfirmationPage(doc, letter);
+    const key = getConfirmationLetterOverrideKey(letter);
+    const letterOverrides =
+      overridesByKey !== undefined ? overridesByKey[key] : letter.textOverrides;
+    renderSingleConfirmationPage(doc, letter, letterOverrides, consultation, orders, invoices);
   });
 
   return doc;
@@ -940,10 +1208,20 @@ export function buildPurchaseConfirmationPdfDocument(letters: PurchaseConfirmati
 
 export function downloadPurchaseConfirmationPdf(
   letters: PurchaseConfirmationLetter[],
-  fileTag?: string
+  fileTag?: string,
+  overridesByKey?: Record<string, PurchaseConfirmationLetterTextOverrides>,
+  consultation?: CurrencyConsultation,
+  orders: PaymentOrder[] = [],
+  invoices: Invoice[] = []
 ): void {
   if (letters.length === 0) return;
-  const doc = buildPurchaseConfirmationPdfDocument(letters);
+  const doc = buildPurchaseConfirmationPdfDocument(
+    letters,
+    overridesByKey,
+    consultation,
+    orders,
+    invoices
+  );
   const safeRef = (fileTag || letters[0].confirmationRef || 'Confirmation')
     .replace(/[/\\:*?"<>|]/g, '-');
   doc.save(`Confirmation_Achat_${safeRef}.pdf`);

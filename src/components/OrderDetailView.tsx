@@ -56,6 +56,7 @@ import { numberToFrenchWords } from '../utils/numberToFrenchWords';
 import { canUserManageOrder, isAdministrator } from '../utils/adminRules';
 import { AdminEditOrderModal } from './AdminEditOrderModal';
 import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
+import { api } from '../services/api';
 
 interface OrderDetailViewProps {
   order: PaymentOrder;
@@ -1355,24 +1356,16 @@ export const OrderDetailView: React.FC<OrderDetailViewProps> = ({
                     </div>
 
                     <div className="flex items-center gap-2">
-                      {doc.dataBase64 ? (
-                        <a
-                          href={doc.dataBase64}
-                          download={doc.name}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Télécharger</span>
-                        </a>
-                      ) : (
-                        <button
-                          onClick={() => alert(`Téléchargement de la pièce : ${doc.name}`)}
-                          className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
-                        >
-                          <Download className="w-3.5 h-3.5" />
-                          <span>Télécharger</span>
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        onClick={() => {
+                          api.downloadOrderDocument(order.id, doc).catch(() => {});
+                        }}
+                        className="flex items-center gap-1 px-3 py-1.5 text-xs font-medium text-slate-700 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg transition-colors"
+                      >
+                        <Download className="w-3.5 h-3.5" />
+                        <span>Télécharger</span>
+                      </button>
                     </div>
                   </div>
                 ))}

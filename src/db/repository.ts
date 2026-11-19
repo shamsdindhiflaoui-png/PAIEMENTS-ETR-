@@ -75,6 +75,16 @@ import {
   validateAdminInvoiceUpdate,
   validateAdminOrderUpdate,
 } from '../utils/adminRules.ts';
+import {
+  computeDashboardStatsFromOrders,
+  filterOrders,
+} from '../utils/dashboardMetrics.ts';
+
+function stripDocBase64<T extends { dataBase64?: string }>(doc: T): T {
+  if (!doc || !doc.dataBase64) return doc;
+  const { dataBase64: _omitted, ...rest } = doc;
+  return rest as T;
+}
 
 let seedPromise: Promise<void> | null = null;
 
@@ -130,6 +140,14 @@ function mapInvoiceRow(row: typeof invoices.$inferSelect): Invoice {
     createdBy: row.createdBy,
     createdById: row.createdById,
     isDemo: row.isDemo,
+  };
+}
+
+function mapInvoiceSummaryRow(row: typeof invoices.$inferSelect): Invoice {
+  const inv = mapInvoiceRow(row);
+  return {
+    ...inv,
+    documents: (inv.documents ?? []).map(stripDocBase64),
   };
 }
 
@@ -221,6 +239,14 @@ function mapOrderRow(row: typeof paymentOrders.$inferSelect): PaymentOrder {
   };
 }
 
+function mapOrderSummaryRow(row: typeof paymentOrders.$inferSelect): PaymentOrder {
+  const order = mapOrderRow(row);
+  return {
+    ...order,
+    documents: (order.documents ?? []).map(stripDocBase64),
+  };
+}
+
 function mapConsultationRow(
   row: typeof currencyConsultations.$inferSelect
 ): CurrencyConsultation {
@@ -251,6 +277,8 @@ function mapConsultationRow(
     confirmationDate: row.confirmationDate ?? undefined,
     valueDate: row.valueDate ?? undefined,
     notes: row.notes ?? undefined,
+    customPdfText: row.customPdfText ?? undefined,
+    customConfirmationTexts: row.customConfirmationTexts ?? undefined,
     isDemo: row.isDemo,
   };
 }
@@ -759,12 +787,15 @@ class PostgresRepository {
     });
   }
 
-  public async getInvoices(filters: { isDemo?: boolean | 'ALL' } = {}): Promise<Invoice[]> {
+  public async getInvoices(
+    filters: { isDemo?: boolean | 'ALL'; includeDocData?: boolean } = {}
+  ): Promise<Invoice[]> {
     return withDbSafety(async () => {
       await this.ensureSeeded();
       const rows = await db.select().from(invoices);
+      const mapper = filters.includeDocData ? mapInvoiceRow : mapInvoiceSummaryRow;
       return rows
-        .map(mapInvoiceRow)
+        .map(mapper)
         .filter(inv => {
           if (filters.isDemo !== undefined && filters.isDemo !== 'ALL') {
             return inv.isDemo === filters.isDemo;
@@ -780,6 +811,16 @@ class PostgresRepository {
       await this.ensureSeeded();
       const rows = await db.select().from(invoices).where(eq(invoices.id, id));
       return rows[0] ? mapInvoiceRow(rows[0]) : undefined;
+    });
+  }
+
+  public async getInvoiceDocument(invoiceId: string, docId: string) {
+    return withDbSafety(async () => {
+      await this.ensureSeeded();
+      const rows = await db.select().from(invoices).where(eq(invoices.id, invoiceId));
+      if (rows.length === 0) return undefined;
+      const docs = rows[0].documents ?? [];
+      return docs.find((d, idx) => (d.id || `inv_doc_${idx}`) === docId || d.name === docId);
     });
   }
 
@@ -1231,68 +1272,18 @@ class PostgresRepository {
     });
   }
 
-  public async getOrders(filters: FilterParams = {}): Promise<PaymentOrder[]> {
+  public async getOrders(
+    filters: FilterParams & { includeDocData?: boolean } = {}
+  ): Promise<PaymentOrder[]> {
     return withDbSafety(async () => {
       await this.ensureSeeded();
       const rows = await db
         .select()
         .from(paymentOrders)
         .orderBy(desc(paymentOrders.createdAt));
-      const allOrders = rows.map(mapOrderRow);
-
-      return allOrders.filter(order => {
-        if (filters.status && filters.status !== 'ALL' && order.status !== filters.status) {
-          return false;
-        }
-        if (filters.currency && filters.currency !== 'ALL' && order.currency !== filters.currency) {
-          return false;
-        }
-        if (
-          filters.bank &&
-          filters.bank !== 'ALL' &&
-          order.bankId !== filters.bank &&
-          order.bankName !== filters.bank
-        ) {
-          return false;
-        }
-        if (
-          filters.supplier &&
-          filters.supplier !== 'ALL' &&
-          order.supplierId !== filters.supplier &&
-          !order.beneficiaryName.toLowerCase().includes(filters.supplier.toLowerCase())
-        ) {
-          return false;
-        }
-        if (filters.fiscalYear && filters.fiscalYear !== 'ALL') {
-          const orderYear = order.fiscalYear || new Date(order.createdAt).getFullYear();
-          if (orderYear !== Number(filters.fiscalYear)) return false;
-        }
-        if (filters.isDemo !== undefined && filters.isDemo !== 'ALL') {
-          if (order.isDemo !== filters.isDemo) return false;
-        }
-        if (filters.startDate) {
-          if (new Date(order.createdAt) < new Date(filters.startDate)) return false;
-        }
-        if (filters.endDate) {
-          const end = new Date(filters.endDate);
-          end.setHours(23, 59, 59, 999);
-          if (new Date(order.createdAt) > end) return false;
-        }
-        if (filters.searchQuery) {
-          const q = filters.searchQuery.toLowerCase();
-          const matches =
-            order.orderNumber.toLowerCase().includes(q) ||
-            order.beneficiaryName.toLowerCase().includes(q) ||
-            order.invoiceNumber.toLowerCase().includes(q) ||
-            (order.proformaNumber && order.proformaNumber.toLowerCase().includes(q)) ||
-            (order.contractNumber && order.contractNumber.toLowerCase().includes(q)) ||
-            (order.lcNumber && order.lcNumber.toLowerCase().includes(q)) ||
-            (order.domiciliationNumber && order.domiciliationNumber.toLowerCase().includes(q)) ||
-            order.bankName.toLowerCase().includes(q);
-          if (!matches) return false;
-        }
-        return true;
-      });
+      const mapper = filters.includeDocData ? mapOrderRow : mapOrderSummaryRow;
+      const allOrders = rows.map(mapper);
+      return filterOrders(allOrders, filters);
     });
   }
 
@@ -1301,6 +1292,54 @@ class PostgresRepository {
       await this.ensureSeeded();
       const rows = await db.select().from(paymentOrders).where(eq(paymentOrders.id, id));
       return rows[0] ? mapOrderRow(rows[0]) : undefined;
+    });
+  }
+
+  public async getOrderDocument(orderId: string, docId: string) {
+    return withDbSafety(async () => {
+      await this.ensureSeeded();
+      const rows = await db.select().from(paymentOrders).where(eq(paymentOrders.id, orderId));
+      if (rows.length === 0) return undefined;
+      const docs = rows[0].documents ?? [];
+      return docs.find(d => d.id === docId || d.name === docId);
+    });
+  }
+
+  public async getBootstrapData(isDemo: boolean | 'ALL' = 'ALL') {
+    return withDbSafety(async () => {
+      await this.ensureSeeded();
+      const [invRows, orderRows, bankRows, supplierRows, userRows, consultationRows] =
+        await Promise.all([
+          db.select().from(invoices),
+          db.select().from(paymentOrders).orderBy(desc(paymentOrders.createdAt)),
+          db.select().from(banks),
+          db.select().from(suppliers),
+          db.select().from(mtkProfiles),
+          db.select().from(currencyConsultations).orderBy(desc(currencyConsultations.createdAt)),
+        ]);
+
+      const invoicesList = invRows
+        .map(mapInvoiceSummaryRow)
+        .filter(inv => (isDemo === 'ALL' ? true : inv.isDemo === isDemo))
+        .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+
+      const ordersList = filterOrders(
+        orderRows.map(mapOrderSummaryRow),
+        { isDemo }
+      );
+
+      const consultationsList = consultationRows
+        .map(mapConsultationRow)
+        .filter(c => (isDemo === 'ALL' ? true : c.isDemo === isDemo));
+
+      return {
+        invoices: invoicesList,
+        orders: ordersList,
+        banks: bankRows.map(mapBankRow),
+        suppliers: supplierRows.map(mapSupplierRow),
+        users: userRows.map(mapProfileRow),
+        consultations: consultationsList,
+      };
     });
   }
 
@@ -2087,86 +2126,7 @@ class PostgresRepository {
 
   public async getDashboardStats(filters: FilterParams = {}): Promise<DashboardStats> {
     const filtered = await this.getOrders(filters);
-
-    let totalEurAmount = 0;
-    let totalUsdAmount = 0;
-    let totalTndExecuted = 0;
-    const amountByCurrency: Record<string, number> = {};
-    const countByStatus: Record<PaymentStatus, number> = {
-      SAISI: 0,
-      TRANSMIS_SIGNATURE: 0,
-      SIGNE: 0,
-      DEPOSE_BANQUE: 0,
-      EN_ATTENTE_ACHAT_DEVISE: 0,
-      EXECUTE: 0,
-      ANNULE: 0,
-    };
-
-    const ordersByBank: Record<string, { count: number; totalTnd: number }> = {};
-    const monthlyMap: Record<
-      string,
-      { count: number; amountEur: number; amountUsd: number; executedTnd: number }
-    > = {};
-
-    filtered.forEach(o => {
-      if (countByStatus[o.status] !== undefined) {
-        countByStatus[o.status]++;
-      }
-
-      amountByCurrency[o.currency] = (amountByCurrency[o.currency] || 0) + o.amount;
-      if (o.currency === 'EUR') totalEurAmount += o.amount;
-      if (o.currency === 'USD') totalUsdAmount += o.amount;
-
-      if (o.status === 'EXECUTE' && o.debitAmountTnd) {
-        totalTndExecuted += o.debitAmountTnd;
-      }
-
-      const bankName = o.bankName || 'Non assignée';
-      if (!ordersByBank[bankName]) {
-        ordersByBank[bankName] = { count: 0, totalTnd: 0 };
-      }
-      ordersByBank[bankName].count++;
-      if (o.debitAmountTnd) {
-        ordersByBank[bankName].totalTnd += o.debitAmountTnd;
-      }
-
-      const date = new Date(o.createdAt);
-      const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
-      if (!monthlyMap[monthKey]) {
-        monthlyMap[monthKey] = { count: 0, amountEur: 0, amountUsd: 0, executedTnd: 0 };
-      }
-      monthlyMap[monthKey].count++;
-      if (o.currency === 'EUR') monthlyMap[monthKey].amountEur += o.amount;
-      if (o.currency === 'USD') monthlyMap[monthKey].amountUsd += o.amount;
-      if (o.status === 'EXECUTE' && o.debitAmountTnd) {
-        monthlyMap[monthKey].executedTnd += o.debitAmountTnd;
-      }
-    });
-
-    const monthlyEvolution = Object.keys(monthlyMap)
-      .sort()
-      .map(month => ({
-        month,
-        ...monthlyMap[month],
-      }));
-
-    return {
-      totalOrders: filtered.length,
-      totalEurAmount,
-      totalUsdAmount,
-      totalTndExecuted,
-      amountByCurrency,
-      countByStatus,
-      saisiCount: countByStatus['SAISI'] || 0,
-      transmisSignatureCount: countByStatus['TRANSMIS_SIGNATURE'] || 0,
-      signeCount: countByStatus['SIGNE'] || 0,
-      depositedCount: countByStatus['DEPOSE_BANQUE'] || 0,
-      pendingExchangeCount: countByStatus['EN_ATTENTE_ACHAT_DEVISE'] || 0,
-      executedCount: countByStatus['EXECUTE'] || 0,
-      cancelledCount: countByStatus['ANNULE'] || 0,
-      ordersByBank,
-      monthlyEvolution,
-    };
+    return computeDashboardStatsFromOrders(filtered);
   }
 
   public async getAuditLogs(): Promise<AuditLog[]> {
@@ -2692,6 +2652,19 @@ class PostgresRepository {
           effectivePayload.notes !== undefined
             ? effectivePayload.notes.trim() || undefined
             : current.notes,
+        customPdfText:
+          effectivePayload.customPdfText !== undefined
+            ? effectivePayload.customPdfText && Object.keys(effectivePayload.customPdfText).length > 0
+              ? effectivePayload.customPdfText
+              : undefined
+            : current.customPdfText,
+        customConfirmationTexts:
+          effectivePayload.customConfirmationTexts !== undefined
+            ? effectivePayload.customConfirmationTexts &&
+              Object.keys(effectivePayload.customConfirmationTexts).length > 0
+              ? effectivePayload.customConfirmationTexts
+              : undefined
+            : current.customConfirmationTexts,
       };
 
       const now = new Date().toISOString();
@@ -2721,6 +2694,8 @@ class PostgresRepository {
             confirmationDate: updated.confirmationDate ?? null,
             valueDate: updated.valueDate ?? null,
             notes: updated.notes ?? null,
+            customPdfText: updated.customPdfText ?? null,
+            customConfirmationTexts: updated.customConfirmationTexts ?? null,
           })
           .where(eq(currencyConsultations.id, consultationId));
 

@@ -1,41 +1,86 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, Suspense, lazy } from 'react';
 import { Sidebar, NavItem } from './components/Sidebar';
 import { Header } from './components/Header';
-import { DashboardView } from './components/DashboardView';
-import { NewOrderView } from './components/NewOrderView';
-import { OrderListView } from './components/OrderListView';
-import { OrderDetailView } from './components/OrderDetailView';
-import { PendingReviewView } from './components/PendingReviewView';
-import { AuditLogsView } from './components/AuditLogsView';
-import { SettingsView } from './components/SettingsView';
-import { BankDepositModal } from './components/BankDepositModal';
-import { ExecutionModal } from './components/ExecutionModal';
-import { PrintOfficialOrderModal } from './components/PrintOfficialOrderModal';
-import { ConsultationsView } from './components/ConsultationsView';
-import { ConsultationDetailView } from './components/ConsultationDetailView';
-import { ConsultationPdfModal } from './components/ConsultationPdfModal';
-import { PurchaseConfirmationPdfModal } from './components/PurchaseConfirmationPdfModal';
-import { InvoicesView } from './components/InvoicesView';
 import { api } from './services/api';
 import {
   PaymentOrder,
   Bank,
   Supplier,
   User,
-  DashboardStats,
   FilterParams,
   PaymentStatus,
   BankDeposit,
   AuditLog,
   CurrencyConsultation,
+  ConsultationPdfTextOverrides,
+  PurchaseConfirmationLetterTextOverrides,
   ExchangeQuote,
   Invoice,
   OrderDeduction,
 } from './types/payment';
 import { CheckCircle2, AlertCircle, Info, X, LogIn, ShieldCheck } from 'lucide-react';
 import { STATUS_META } from './utils/workflowRules';
+import { canUserManageConsultation } from './utils/adminRules';
 import { doesOrderBelongToInvoice, getAvailableInvoicesForOrder } from './utils/invoiceUtils';
+import { computeDashboardStatsFromOrders, filterOrders } from './utils/dashboardMetrics';
 import { useAuth } from './contexts/AuthContext';
+
+const DashboardView = lazy(() =>
+  import('./components/DashboardView').then(m => ({ default: m.DashboardView }))
+);
+const NewOrderView = lazy(() =>
+  import('./components/NewOrderView').then(m => ({ default: m.NewOrderView }))
+);
+const OrderListView = lazy(() =>
+  import('./components/OrderListView').then(m => ({ default: m.OrderListView }))
+);
+const OrderDetailView = lazy(() =>
+  import('./components/OrderDetailView').then(m => ({ default: m.OrderDetailView }))
+);
+const PendingReviewView = lazy(() =>
+  import('./components/PendingReviewView').then(m => ({ default: m.PendingReviewView }))
+);
+const AuditLogsView = lazy(() =>
+  import('./components/AuditLogsView').then(m => ({ default: m.AuditLogsView }))
+);
+const SettingsView = lazy(() =>
+  import('./components/SettingsView').then(m => ({ default: m.SettingsView }))
+);
+const ConsultationsView = lazy(() =>
+  import('./components/ConsultationsView').then(m => ({ default: m.ConsultationsView }))
+);
+const ConsultationDetailView = lazy(() =>
+  import('./components/ConsultationDetailView').then(m => ({ default: m.ConsultationDetailView }))
+);
+const InvoicesView = lazy(() =>
+  import('./components/InvoicesView').then(m => ({ default: m.InvoicesView }))
+);
+const BankDepositModal = lazy(() =>
+  import('./components/BankDepositModal').then(m => ({ default: m.BankDepositModal }))
+);
+const ExecutionModal = lazy(() =>
+  import('./components/ExecutionModal').then(m => ({ default: m.ExecutionModal }))
+);
+const PrintOfficialOrderModal = lazy(() =>
+  import('./components/PrintOfficialOrderModal').then(m => ({ default: m.PrintOfficialOrderModal }))
+);
+const ConsultationPdfModal = lazy(() =>
+  import('./components/ConsultationPdfModal').then(m => ({ default: m.ConsultationPdfModal }))
+);
+const PurchaseConfirmationPdfModal = lazy(() =>
+  import('./components/PurchaseConfirmationPdfModal').then(m => ({
+    default: m.PurchaseConfirmationPdfModal,
+  }))
+);
+
+const ViewLoadingFallback: React.FC = () => (
+  <div className="p-8 flex items-center justify-center min-h-[320px]">
+    <div className="text-center space-y-3">
+      <div className="w-7 h-7 border-2 border-blue-600 border-t-transparent rounded-full animate-spin mx-auto" />
+      <p className="text-xs text-slate-500 font-medium">Chargement du module...</p>
+    </div>
+  </div>
+);
 
 export default function App() {
   const { firebaseUser, authLoading, authError, signInWithGoogle, signOutUser } = useAuth();
@@ -51,9 +96,10 @@ export default function App() {
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
   const [users, setUsers] = useState<User[]>([]);
   const [currentUser, setCurrentUser] = useState<User>(api.getCurrentUser());
-  const [stats, setStats] = useState<DashboardStats | null>(null);
+  const [isBootstrapLoaded, setIsBootstrapLoaded] = useState<boolean>(false);
   const [auditLogs, setAuditLogs] = useState<AuditLog[]>([]);
   const [consultations, setConsultations] = useState<CurrencyConsultation[]>([]);
+  const auditLogsDirtyRef = useRef<boolean>(true);
 
   // Filtering
   const [showDemoData, setShowDemoData] = useState<boolean>(true);
@@ -86,57 +132,79 @@ export default function App() {
     }, 4500);
   };
 
-  // Initial load (only after Firebase Auth is ready & authenticated)
+  // Filtered orders and dashboard stats computed in-memory (no extra HTTP requests on filter change)
+  const filteredOrders = useMemo(
+    () =>
+      filterOrders(orders, {
+        ...filters,
+        isDemo: showDemoData ? 'ALL' : false,
+      }),
+    [orders, filters, showDemoData]
+  );
+
+  const stats = useMemo(
+    () => (isBootstrapLoaded ? computeDashboardStatsFromOrders(filteredOrders) : null),
+    [isBootstrapLoaded, filteredOrders]
+  );
+
+  // Initial load (1 aggregated /api/bootstrap request instead of 8 parallel requests)
   const loadAllData = useCallback(async () => {
     if (!firebaseUser) return;
     try {
-      const activeFilters: FilterParams = {
-        ...filters,
-        isDemo: showDemoData ? 'ALL' : false,
-      };
-
-      const [invoicesRes, ordersRes, statsRes, banksRes, suppliersRes, usersRes, logsRes, consultationsRes] = await Promise.all([
-        api.getInvoices(showDemoData ? 'ALL' : false),
-        api.getOrders(activeFilters),
-        api.getDashboardStats(activeFilters),
-        api.getBanks(),
-        api.getSuppliers(),
-        api.getUsers(),
-        api.getAuditLogs(),
-        api.getConsultations(),
-      ]);
-
-      setInvoices(invoicesRes);
-      setOrders(ordersRes);
-      setStats(statsRes);
-      setBanks(banksRes);
-      setSuppliers(suppliersRes);
-      setUsers(usersRes);
+      const data = await api.getBootstrap(showDemoData ? 'ALL' : false);
+      setInvoices(data.invoices);
+      setOrders(data.orders);
+      setBanks(data.banks);
+      setSuppliers(data.suppliers);
+      setUsers(data.users);
       setCurrentUser(prev => {
-        const matched = usersRes.find(u => u.id === prev.id);
+        const matched = data.users.find(u => u.id === prev.id);
         if (matched && matched.userCode && matched.userCode !== prev.userCode) {
           api.setCurrentUser(matched);
           return matched;
         }
         return prev;
       });
-      setAuditLogs(logsRes);
-      setConsultations(
-        showDemoData ? consultationsRes : consultationsRes.filter(c => !c.isDemo)
-      );
+      setConsultations(data.consultations);
+      setIsBootstrapLoaded(true);
+      auditLogsDirtyRef.current = true;
     } catch (err: any) {
       console.error('Error fetching data:', err);
       showToast('error', err.message || 'Erreur lors du chargement des données');
     }
-  }, [filters, showDemoData, firebaseUser]);
+  }, [showDemoData, firebaseUser]);
 
   useEffect(() => {
     api.initUser();
     setCurrentUser(api.getCurrentUser());
     if (firebaseUser) {
       loadAllData();
+    } else {
+      setIsBootstrapLoaded(false);
     }
   }, [loadAllData, firebaseUser]);
+
+  // Lazy-load Audit Logs only when user opens the Audit Logs tab
+  useEffect(() => {
+    if (!firebaseUser || activeView !== 'audit_logs' || !auditLogsDirtyRef.current) return;
+    let cancelled = false;
+    api
+      .getAuditLogs()
+      .then(logs => {
+        if (!cancelled) {
+          setAuditLogs(logs);
+          auditLogsDirtyRef.current = false;
+        }
+      })
+      .catch((err: any) => {
+        if (!cancelled) {
+          showToast('error', err.message || 'Erreur lors du chargement du journal d’audit');
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeView, firebaseUser, orders]);
 
   // User Switcher
   const handleUserChange = (user: User) => {
@@ -485,6 +553,43 @@ export default function App() {
     }
   };
 
+  const handleSaveConsultationPdfText = async (
+    consultationId: string,
+    customPdfText: ConsultationPdfTextOverrides | null
+  ) => {
+    try {
+      const updated = await api.updateConsultation(consultationId, {
+        customPdfText: customPdfText as any,
+      });
+      setPdfModalConsultation(updated);
+      showToast('success', `Texte du PDF enregistré pour ${updated.consultationNumber}`);
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la sauvegarde du texte PDF');
+      throw err;
+    }
+  };
+
+  const handleSaveConfirmationTexts = async (
+    consultationId: string,
+    customConfirmationTexts: Record<string, PurchaseConfirmationLetterTextOverrides> | null
+  ) => {
+    try {
+      const updated = await api.updateConsultation(consultationId, {
+        customConfirmationTexts: customConfirmationTexts as any,
+      });
+      setConfirmationModalState(prev => (prev ? { ...prev, consultation: updated } : prev));
+      showToast(
+        'success',
+        `Textes des confirmations enregistrés pour ${updated.consultationNumber}`
+      );
+      await loadAllData();
+    } catch (err: any) {
+      showToast('error', err.message || 'Erreur lors de la sauvegarde des textes PDF');
+      throw err;
+    }
+  };
+
   const handleDeleteConsultation = async (consultationId: string) => {
     try {
       await api.deleteConsultation(consultationId);
@@ -662,6 +767,7 @@ export default function App() {
 
         {/* Viewport Scroll Container */}
         <main className="flex-1 overflow-y-auto p-6">
+          <Suspense fallback={<ViewLoadingFallback />}>
           {/* 1. Dashboard View */}
           {activeView === 'dashboard' && (
             <DashboardView
@@ -746,7 +852,7 @@ export default function App() {
           {/* 3. Orders List View */}
           {activeView === 'orders_list' && (
             <OrderListView
-              orders={orders}
+              orders={filteredOrders}
               banks={banks}
               suppliers={suppliers}
               currentUser={currentUser}
@@ -819,6 +925,7 @@ export default function App() {
           {activeView === 'consultations' && (
             <ConsultationsView
               orders={orders}
+              invoices={invoices}
               consultations={consultations}
               banks={banks}
               currentUser={currentUser}
@@ -847,6 +954,7 @@ export default function App() {
             <ConsultationDetailView
               consultation={selectedConsultation}
               orders={orders}
+              invoices={invoices}
               consultations={consultations}
               banks={banks}
               currentUser={currentUser}
@@ -891,11 +999,12 @@ export default function App() {
               onResetDemo={handleResetDemo}
             />
           )}
+          </Suspense>
         </main>
       </div>
 
       {/* MODALS */}
-
+      <Suspense fallback={null}>
       {/* Bank Deposit Modal */}
       {depositModalOrder && (
         <BankDepositModal
@@ -933,23 +1042,45 @@ export default function App() {
       )}
 
       {/* Module 02 Consultation PDF Preview & Download Modal */}
-      {pdfModalConsultation && (
-        <ConsultationPdfModal
-          consultation={pdfModalConsultation}
-          onClose={() => setPdfModalConsultation(null)}
-        />
-      )}
+      {pdfModalConsultation && (() => {
+        const liveConsultation =
+          consultations.find(c => c.id === pdfModalConsultation.id) || pdfModalConsultation;
+        return (
+          <ConsultationPdfModal
+            consultation={liveConsultation}
+            orders={orders}
+            invoices={invoices}
+            canSave={Boolean(
+              currentUser && canUserManageConsultation(currentUser, liveConsultation).allowed
+            )}
+            onSavePdfText={handleSaveConsultationPdfText}
+            onClose={() => setPdfModalConsultation(null)}
+          />
+        );
+      })()}
 
       {/* Module 02 Purchase Confirmation(s) + Récap PDF Modal */}
-      {confirmationModalState && (
-        <PurchaseConfirmationPdfModal
-          consultation={confirmationModalState.consultation}
-          orders={orders}
-          banks={banks}
-          initialTab={confirmationModalState.initialTab}
-          onClose={() => setConfirmationModalState(null)}
-        />
-      )}
+      {confirmationModalState && (() => {
+        const liveConfirmationConsultation =
+          consultations.find(c => c.id === confirmationModalState.consultation.id) ||
+          confirmationModalState.consultation;
+        return (
+          <PurchaseConfirmationPdfModal
+            consultation={liveConfirmationConsultation}
+            orders={orders}
+            invoices={invoices}
+            banks={banks}
+            initialTab={confirmationModalState.initialTab}
+            canSave={Boolean(
+              currentUser &&
+                canUserManageConsultation(currentUser, liveConfirmationConsultation).allowed
+            )}
+            onSaveConfirmationTexts={handleSaveConfirmationTexts}
+            onClose={() => setConfirmationModalState(null)}
+          />
+        );
+      })()}
+      </Suspense>
 
       {/* Toast Floating Notification */}
       {toast && (

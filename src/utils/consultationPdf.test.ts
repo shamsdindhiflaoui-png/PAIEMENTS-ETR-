@@ -6,6 +6,9 @@ import {
   formatConsultationTime,
   validateConsultationSelection,
   buildConsultationPdfDocument,
+  getDefaultConsultationPdfContent,
+  resolveConsultationPdfContent,
+  extractConsultationOverridesForSave,
 } from './consultationPdf';
 import { PaymentOrder, CurrencyConsultation } from '../types/payment';
 
@@ -106,4 +109,54 @@ test('buildConsultationPdfDocument generates a valid non-empty PDF buffer', () =
   assert.ok(arrayBuffer.byteLength > 1000);
   const header = new TextDecoder().decode(new Uint8Array(arrayBuffer.slice(0, 5)));
   assert.equal(header, '%PDF-');
+});
+
+test('resolveConsultationPdfContent and extractConsultationOverridesForSave handle custom text and reset', () => {
+  const consultation: CurrencyConsultation = {
+    id: 'cons_override',
+    consultationNumber: 'CONS-2026-0009',
+    createdAt: '2026-11-12T10:00:00.000Z',
+    createdBy: 'Monia Ben Salem',
+    createdById: 'usr_agent1',
+    orderIds: ['o1'],
+    orderNumbers: ['001-026-0001'],
+    currency: 'EUR',
+    totalAmount: 12500,
+    operationDate: '2026-11-15',
+    purchaseType: 'au comptant',
+    submissionDeadlineTime: '14h20',
+    validityDeadlineTime: '14h30',
+    customPdfText: {
+      subjectText: 'Consultation urgente pour achat EUR.',
+      quoteRequestParagraph: 'Merci de nous transmettre votre offre ferme avant 15h00.\nCordialement.',
+      signatureLabel: 'Le Directeur Financier',
+    },
+    status: 'OUVERTE',
+    isDemo: false,
+  };
+
+  const resolved = resolveConsultationPdfContent(consultation);
+  assert.equal(resolved.subjectText, 'Consultation urgente pour achat EUR.');
+  assert.equal(resolved.isQuoteRequestCustom, true);
+  assert.equal(resolved.isValidityCustom, false);
+  assert.equal(resolved.signatureLabel, 'Le Directeur Financier');
+
+  const extracted = extractConsultationOverridesForSave(resolved, consultation);
+  assert.deepEqual(extracted, {
+    subjectText: 'Consultation urgente pour achat EUR.',
+    quoteRequestParagraph: 'Merci de nous transmettre votre offre ferme avant 15h00.\nCordialement.',
+    signatureLabel: 'Le Directeur Financier',
+  });
+
+  // Explicit empty override simulates reset
+  const resetResolved = resolveConsultationPdfContent(consultation, {});
+  const defaults = getDefaultConsultationPdfContent(consultation);
+  assert.equal(resetResolved.subjectText, defaults.subjectText);
+  assert.equal(resetResolved.isQuoteRequestCustom, false);
+  assert.equal(extractConsultationOverridesForSave(resetResolved, consultation), undefined);
+
+  // Verify PDF builds cleanly with multiline custom text
+  const customDoc = buildConsultationPdfDocument(consultation);
+  const bytes = customDoc.output('arraybuffer');
+  assert.ok(bytes.byteLength > 1000);
 });

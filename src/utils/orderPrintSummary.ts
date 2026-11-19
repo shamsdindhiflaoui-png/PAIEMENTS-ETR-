@@ -7,6 +7,11 @@ import {
 } from './invoiceUtils';
 import { formatForeignCurrency } from './workflowRules';
 
+export const HALF_A4_SIGNATORIES = [
+  { title: '1. Service Financier', subtitle: 'Signature & Date' },
+  { title: '2. S/D Trésorerie', subtitle: 'Signature & Visa' },
+] as const;
+
 export interface OrderPrintData {
   orderNumber: string;
   orderDateIso: string;
@@ -37,6 +42,7 @@ export interface OrderPrintData {
   invoiceDateFormatted: string;
   proformaRecall?: string;
   contractNumber?: string;
+  invoicePurpose: string;
   purpose: string;
   hasLinkedInvoice: boolean;
   invoiceTotalAmount?: number;
@@ -120,6 +126,12 @@ export function computeOrderPrintData(
     (order.invoiceNumber || linkedInvoice?.invoiceNumber || '').trim() || '—';
   const contractNumber =
     (order.contractNumber || linkedInvoice?.contractNumber || '').trim() || undefined;
+  const invoicePurpose = (
+    linkedInvoice?.purpose ||
+    order.purpose ||
+    order.transferPurpose ||
+    ''
+  ).trim();
 
   const rawProformaNum = (
     order.proformaNumber ||
@@ -196,7 +208,8 @@ export function computeOrderPrintData(
         invoiceDateFormatted: formatPrintDateFr(invoiceDateIso),
         proformaRecall,
         contractNumber,
-        purpose: order.transferPurpose || order.purpose,
+        invoicePurpose,
+        purpose: invoicePurpose,
         hasLinkedInvoice: true,
         invoiceTotalAmount: invoiceTotal,
         formattedInvoiceTotal,
@@ -275,7 +288,8 @@ export function computeOrderPrintData(
       invoiceDateFormatted: formatPrintDateFr(invoiceDateIso),
       proformaRecall,
       contractNumber,
-      purpose: order.transferPurpose || order.purpose,
+      invoicePurpose,
+      purpose: invoicePurpose,
       hasLinkedInvoice: true,
       invoiceTotalAmount: invoiceTotal,
       formattedInvoiceTotal,
@@ -335,7 +349,8 @@ export function computeOrderPrintData(
     invoiceDateFormatted: formatPrintDateFr(invoiceDateIso),
     proformaRecall,
     contractNumber,
-    purpose: order.transferPurpose || order.purpose,
+    invoicePurpose,
+    purpose: invoicePurpose,
     hasLinkedInvoice: false,
     orderSharePercent: isCancelled ? 0 : 100,
     cumulativePercent: isCancelled ? 0 : 100,
@@ -515,33 +530,25 @@ export function buildHalfA4OrderPdf(
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(6.5);
     doc.text(
-      pdfSafeText(
-        data.contractNumber
-          ? `Contrat : ${data.contractNumber}`
-          : `Date ordre : ${data.orderDateFormatted}`
-      ),
+      pdfSafeText(`Date ordre : ${data.orderDateFormatted}`),
       rightX + 2.5,
-      r1Y + 22.9,
+      r1Y + 22.8,
       { maxWidth: rightW - 5 }
     );
   } else {
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7);
     doc.text(
-      pdfSafeText(
-        data.contractNumber
-          ? `Contrat : ${data.contractNumber}`
-          : `Date ordre : ${data.orderDateFormatted}`
-      ),
+      pdfSafeText(`Date ordre : ${data.orderDateFormatted}`),
       rightX + 2.5,
       r1Y + 21.2,
       { maxWidth: rightW - 5 }
     );
   }
 
-  // Row 2 (y: 51.5 -> 79.5): Montant de l'ordre
-  const r2Y = 51.5;
-  const r2H = 26;
+  // Row 2 (y: 50.5 -> 74.5): Montant de l'ordre
+  const r2Y = 50.5;
+  const r2H = 24;
   doc.setFillColor(246, 246, 246);
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.45);
@@ -557,55 +564,55 @@ export function buildHalfA4OrderPdf(
         : "MONTANT DE L'ORDRE"
     ),
     leftX + 3,
-    r2Y + 4.8
+    r2Y + 4.5
   );
 
   doc.setTextColor(0, 0, 0);
-  doc.setFontSize(14);
-  doc.text(pdfSafeText(data.formattedNetAmount), leftX + 3, r2Y + 11.5);
+  doc.setFontSize(13.5);
+  doc.text(pdfSafeText(data.formattedNetAmount), leftX + 3, r2Y + 10.8);
 
   if (data.hasDeductions) {
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(7.4);
+    doc.setFontSize(7.3);
     doc.text(
       pdfSafeText(
         `Brut facture impute : ${data.formattedGrossAmount}   |   Deductions / Frais : -${data.formattedDeductionsTotal}`
       ),
       leftX + 75,
-      r2Y + 11
+      r2Y + 10.4
     );
   }
 
   doc.setFont('helvetica', 'italic');
-  doc.setFontSize(7.5);
+  doc.setFontSize(7.4);
   const wordsLines = doc.splitTextToSize(
     pdfSafeText(`En lettres : "${data.amountInWords}"`),
     contentWidth - 11
   );
-  doc.text(wordsLines.slice(0, 2), leftX + 3, r2Y + 17.5);
+  doc.text(wordsLines.slice(0, 2), leftX + 3, r2Y + 16.5);
 
-  // Row 3 (y: 80 -> 99.5): Part de règlement de la facture
-  const r3Y = 80;
-  const r3H = 19.5;
+  // Row 3 (y: 76 -> 93.5): Part de règlement de la facture
+  const r3Y = 76;
+  const r3H = 17.5;
   doc.setFillColor(255, 255, 255);
   doc.setDrawColor(0, 0, 0);
   doc.setLineWidth(0.3);
   doc.rect(leftX, r3Y, contentWidth - 5, r3H);
 
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(6.8);
+  doc.setFontSize(6.6);
   doc.setTextColor(60, 60, 60);
-  doc.text('PART DE REGLEMENT DE LA FACTURE', leftX + 3, r3Y + 4.3);
+  doc.text('PART DE REGLEMENT DE LA FACTURE', leftX + 3, r3Y + 4);
 
   doc.setTextColor(0, 0, 0);
-  doc.setFontSize(8.5);
-  doc.text(pdfSafeText(data.settlementHeadline), leftX + 3, r3Y + 9.2, {
+  doc.setFontSize(8.3);
+  doc.text(pdfSafeText(data.settlementHeadline), leftX + 3, r3Y + 8.7, {
     maxWidth: contentWidth - 46,
   });
 
   doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7.2);
-  doc.text(pdfSafeText(data.settlementSubline), leftX + 3, r3Y + 13.8, {
+  doc.setFontSize(7.1);
+  doc.text(pdfSafeText(data.settlementSubline), leftX + 3, r3Y + 13.2, {
     maxWidth: contentWidth - 46,
   });
 
@@ -613,7 +620,7 @@ export function buildHalfA4OrderPdf(
   if (data.hasLinkedInvoice && !data.isCancelled) {
     const barW = 34;
     const barX = leftX + contentWidth - 5 - barW - 3;
-    const barY = r3Y + 7.5;
+    const barY = r3Y + 6.5;
     doc.setDrawColor(0, 0, 0);
     doc.setFillColor(255, 255, 255);
     doc.rect(barX, barY, barW, 3.2, 'FD');
@@ -627,45 +634,70 @@ export function buildHalfA4OrderPdf(
     doc.text(
       pdfSafeText(`Cumul : ${data.cumulativePercent} %`),
       barX + barW / 2,
-      barY + 6.5,
+      barY + 6.4,
       { align: 'center' }
     );
   }
 
-  // Row 4 (y: 101 -> 109): Objet / Motif (1 compact line)
+  // Row 4 (y: 95 -> 108.5): Objet de la facture & Contrat
+  const r4Y = 95;
+  const r4H = 13.5;
+  const objW = 126;
+  const ctrW = contentWidth - 5 - objW - 2;
+  const ctrX = leftX + objW + 2;
+
+  doc.setDrawColor(90, 90, 90);
+  doc.setLineWidth(0.25);
+  doc.rect(leftX, r4Y, objW, r4H);
+  doc.rect(ctrX, r4Y, ctrW, r4H);
+
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7);
-  doc.text('Objet :', leftX, 105.5);
+  doc.setFontSize(6.4);
+  doc.setTextColor(70, 70, 70);
+  doc.text('OBJET DE LA FACTURE', leftX + 2.5, r4Y + 3.8);
+
+  doc.setTextColor(0, 0, 0);
   doc.setFont('helvetica', 'normal');
-  doc.text(pdfSafeText(data.purpose || '—'), leftX + 11, 105.5, {
-    maxWidth: contentWidth - 16,
+  doc.setFontSize(7.3);
+  const purposeLines = doc.splitTextToSize(
+    pdfSafeText(data.invoicePurpose || '—'),
+    objW - 5
+  );
+  doc.text(purposeLines.slice(0, 2), leftX + 2.5, r4Y + 7.8);
+
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(6.4);
+  doc.setTextColor(70, 70, 70);
+  doc.text('CONTRAT', ctrX + 2.5, r4Y + 3.8);
+
+  doc.setTextColor(0, 0, 0);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.2);
+  doc.text(pdfSafeText(data.contractNumber || '—'), ctrX + 2.5, r4Y + 9.2, {
+    maxWidth: ctrW - 5,
   });
 
-  // Row 5 (y: 109 -> 133): 4 compact visa boxes
-  const visaY = 109;
-  const visaH = 23.5;
-  const visaGap = 2.5;
-  const visaBoxW = (contentWidth - 5 - visaGap * 3) / 4;
-  const visas = [
-    { title: '1. Agent Comptable', sub: 'Visa & Date' },
-    { title: '2. Controle de Gestion', sub: 'Visa Budgetaire' },
-    { title: '3. Directeur Financier', sub: 'Bon a Executer' },
-    { title: '4. Banque MTK', sub: 'Cachet & Ref. SWIFT' },
-  ];
+  // Row 5 (y: 110.5 -> 134.5): 2 Signataires (1. Service Financier | 2. S/D Trésorerie)
+  const visaY = 110.5;
+  const visaH = 24;
+  const visaGap = 4;
+  const visaBoxW = (contentWidth - 5 - visaGap) / 2;
 
-  visas.forEach((v, idx) => {
+  HALF_A4_SIGNATORIES.forEach((v, idx) => {
     const vx = leftX + idx * (visaBoxW + visaGap);
-    doc.setDrawColor(60, 60, 60);
-    doc.setLineWidth(0.25);
+    doc.setDrawColor(40, 40, 40);
+    doc.setLineWidth(0.3);
     doc.rect(vx, visaY, visaBoxW, visaH);
     doc.setFont('helvetica', 'bold');
-    doc.setFontSize(6.8);
+    doc.setFontSize(7.6);
     doc.setTextColor(0, 0, 0);
-    doc.text(pdfSafeText(v.title), vx + visaBoxW / 2, visaY + 4.3, { align: 'center' });
+    doc.text(pdfSafeText(v.title), vx + visaBoxW / 2, visaY + 4.8, { align: 'center' });
     doc.setFont('helvetica', 'normal');
-    doc.setFontSize(6.2);
+    doc.setFontSize(6.4);
     doc.setTextColor(90, 90, 90);
-    doc.text(pdfSafeText(v.sub), vx + visaBoxW / 2, visaY + visaH - 2.5, { align: 'center' });
+    doc.text(pdfSafeText(v.subtitle), vx + visaBoxW / 2, visaY + visaH - 2.6, {
+      align: 'center',
+    });
   });
 
   // Footer
@@ -677,7 +709,7 @@ export function buildHalfA4OrderPdf(
       `MTK International Payments (DFC) - Format Demi-Feuille A4 (210 x 148 mm) - Ref. ${data.orderNumber}`
     ),
     pageWidth / 2,
-    138.2,
+    138.6,
     { align: 'center' }
   );
 

@@ -12,6 +12,7 @@ import {
 import type {
   BankConfirmationContact,
   BankDeposit,
+  ConsultationPdfTextOverrides,
   ConsultationStatus,
   ExchangeQuote,
   ExchangeTransaction,
@@ -22,6 +23,7 @@ import type {
   PaymentDocument,
   PaymentStatus,
   PaymentWorkflow,
+  PurchaseConfirmationLetterTextOverrides,
   UserRole,
 } from '../types/payment.ts';
 
@@ -211,6 +213,10 @@ export const currencyConsultations = pgTable('currency_consultations', {
   confirmationDate: text('confirmation_date'),
   valueDate: text('value_date'),
   notes: text('notes'),
+  customPdfText: jsonb('custom_pdf_text').$type<ConsultationPdfTextOverrides>(),
+  customConfirmationTexts: jsonb('custom_confirmation_texts').$type<
+    Record<string, PurchaseConfirmationLetterTextOverrides>
+  >(),
   isDemo: boolean('is_demo').notNull().default(false),
 });
 

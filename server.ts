@@ -1,4 +1,5 @@
 import express, { Request, Response } from 'express';
+import compression from 'compression';
 import { createServer as createViteServer } from 'vite';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -14,6 +15,7 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
+  app.use(compression());
   app.use(express.json({ limit: '50mb' }));
   app.use(express.urlencoded({ extended: true, limit: '50mb' }));
 
@@ -63,6 +65,21 @@ async function startServer() {
   };
 
   // --- API ENDPOINTS (PostgreSQL Cloud SQL + Drizzle) ---
+
+  // 0. Bootstrap agrégé (1 seule requête au démarrage, sans auditLogs ni dataBase64)
+  app.get('/api/bootstrap', async (req: Request, res: Response) => {
+    try {
+      const isDemo =
+        req.query.isDemo === 'true'
+          ? true
+          : req.query.isDemo === 'false'
+          ? false
+          : 'ALL';
+      res.json(await repository.getBootstrapData(isDemo));
+    } catch (err: any) {
+      handleError(res, err, 500);
+    }
+  });
 
   // 1. Utilisateurs / Profils DFC
   app.get('/api/users', async (_req: Request, res: Response) => {
@@ -163,6 +180,19 @@ async function startServer() {
       res.json(updated);
     } catch (err: any) {
       handleError(res, err);
+    }
+  });
+
+  app.get('/api/invoices/:id/documents/:docId', async (req: Request, res: Response) => {
+    try {
+      const doc = await repository.getInvoiceDocument(req.params.id, req.params.docId);
+      if (!doc) {
+        res.status(404).json({ error: 'Pièce jointe introuvable' });
+        return;
+      }
+      res.json(doc);
+    } catch (err: any) {
+      handleError(res, err, 500);
     }
   });
 
@@ -396,6 +426,20 @@ async function startServer() {
       res.json(order);
     } catch (err: any) {
       handleError(res, err);
+    }
+  });
+
+  // Téléchargement à la demande d'une pièce justificative d'ordre
+  app.get('/api/orders/:id/documents/:docId', async (req: Request, res: Response) => {
+    try {
+      const doc = await repository.getOrderDocument(req.params.id, req.params.docId);
+      if (!doc) {
+        res.status(404).json({ error: 'Pièce justificative introuvable' });
+        return;
+      }
+      res.json(doc);
+    } catch (err: any) {
+      handleError(res, err, 500);
     }
   });
 

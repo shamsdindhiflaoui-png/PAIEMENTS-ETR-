@@ -16,6 +16,8 @@ import {
 
 class ApiService {
   private authToken: string | null = null;
+  private authTokenFetchedAt = 0;
+  private tokenPromise: Promise<string | null> | null = null;
   private tokenProvider: (() => Promise<string | null>) | null = null;
 
   private currentUser: User = {
@@ -29,6 +31,7 @@ class ApiService {
 
   public setAuthToken(token: string | null) {
     this.authToken = token;
+    this.authTokenFetchedAt = token ? Date.now() : 0;
   }
 
   public setTokenProvider(provider: (() => Promise<string | null>) | null) {
@@ -57,12 +60,19 @@ class ApiService {
 
   private async getHeaders(): Promise<Record<string, string>> {
     let token = this.authToken;
-    if (this.tokenProvider) {
+    const isTokenFresh = Boolean(token && Date.now() - this.authTokenFetchedAt < 30_000);
+    if (!isTokenFresh && this.tokenProvider) {
       try {
-        const fresh = await this.tokenProvider();
+        if (!this.tokenPromise) {
+          this.tokenPromise = this.tokenProvider().finally(() => {
+            this.tokenPromise = null;
+          });
+        }
+        const fresh = await this.tokenPromise;
         if (fresh) {
           token = fresh;
           this.authToken = fresh;
+          this.authTokenFetchedAt = Date.now();
         }
       } catch {
         // fallback to in-memory token
@@ -79,6 +89,27 @@ class ApiService {
       headers['Authorization'] = `Bearer ${token}`;
     }
     return headers;
+  }
+
+  public async getBootstrap(isDemo?: boolean | 'ALL'): Promise<{
+    invoices: Invoice[];
+    orders: PaymentOrder[];
+    banks: Bank[];
+    suppliers: Supplier[];
+    users: User[];
+    consultations: CurrencyConsultation[];
+  }> {
+    const params = new URLSearchParams();
+    if (isDemo !== undefined && isDemo !== 'ALL') {
+      params.set('isDemo', String(isDemo));
+    }
+    const qs = params.toString();
+    const res = await fetch(`/api/bootstrap${qs ? `?${qs}` : ''}`, {
+      cache: 'no-store',
+      headers: await this.getHeaders(),
+    });
+    if (!res.ok) throw new Error('Erreur lors du chargement initial des données');
+    return res.json();
   }
 
   public async getUsers(): Promise<User[]> {
@@ -503,6 +534,52 @@ class ApiService {
       headers: await this.getHeaders(),
     });
     if (!res.ok) throw new Error('Erreur réinitialisation');
+  }
+
+  public async downloadOrderDocument(
+    orderId: string,
+    doc: { id?: string; name: string; dataBase64?: string; fileUrl?: string }
+  ): Promise<void> {
+    let href = doc.dataBase64 || doc.fileUrl;
+    if (!href) {
+      const docKey = encodeURIComponent(doc.id || doc.name);
+      const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/documents/${docKey}`, {
+        headers: await this.getHeaders(),
+      });
+      if (!res.ok) throw new Error('Impossible de télécharger la pièce justificative');
+      const full = await res.json();
+      href = full?.dataBase64 || full?.fileUrl;
+    }
+    if (!href) throw new Error('Aucun contenu fichier disponible pour cette pièce');
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = doc.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+  }
+
+  public async downloadInvoiceDocument(
+    invoiceId: string,
+    doc: { id?: string; name: string; dataBase64?: string; fileUrl?: string }
+  ): Promise<void> {
+    let href = doc.dataBase64 || doc.fileUrl;
+    if (!href) {
+      const docKey = encodeURIComponent(doc.id || doc.name);
+      const res = await fetch(`/api/invoices/${encodeURIComponent(invoiceId)}/documents/${docKey}`, {
+        headers: await this.getHeaders(),
+      });
+      if (!res.ok) throw new Error('Impossible de télécharger la pièce jointe');
+      const full = await res.json();
+      href = full?.dataBase64 || full?.fileUrl;
+    }
+    if (!href) throw new Error('Aucun contenu fichier disponible pour cette pièce');
+    const a = document.createElement('a');
+    a.href = href;
+    a.download = doc.name;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
   }
 
   public async exportCsv(): Promise<void> {

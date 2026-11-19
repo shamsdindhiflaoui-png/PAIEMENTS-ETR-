@@ -1,7 +1,11 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Invoice, PaymentOrder } from '../types/payment';
-import { buildHalfA4OrderPdf, computeOrderPrintData } from './orderPrintSummary';
+import {
+  HALF_A4_SIGNATORIES,
+  buildHalfA4OrderPdf,
+  computeOrderPrintData,
+} from './orderPrintSummary';
 
 const BASE_INVOICE: Invoice = {
   id: 'inv_1',
@@ -221,4 +225,35 @@ test('computeOrderPrintData formats 50% LC on Proforma vs 50% Virement on Factur
   assert.equal(docVir.getNumberOfPages(), 1);
   assert.ok(docVir.output('arraybuffer').byteLength > 1000);
 });
+
+test('Half-A4 print includes invoice purpose (Objet de la facture), Contrat, and exactly 2 signatories (Service Financier and S/D Trésorerie)', () => {
+  assert.equal(HALF_A4_SIGNATORIES.length, 2);
+  assert.equal(HALF_A4_SIGNATORIES[0].title, '1. Service Financier');
+  assert.equal(HALF_A4_SIGNATORIES[1].title, '2. S/D Trésorerie');
+
+  const ord = makeOrder({
+    invoiceId: 'inv_1',
+    purpose: 'Objet ordre secondaire',
+    transferPurpose: 'Règlement facture FAC-2026-0100',
+    contractNumber: undefined,
+  });
+
+  const data = computeOrderPrintData(ord, BASE_INVOICE, [ord]);
+  assert.equal(data.invoicePurpose, 'Importation tabac brut');
+  assert.equal(data.purpose, 'Importation tabac brut');
+  assert.equal(data.contractNumber, 'CT-2026/MTK-01');
+
+  const doc = buildHalfA4OrderPdf(ord, BASE_INVOICE, [ord]);
+  const pdfRaw = doc.output('datauristring');
+  const decoded = Buffer.from(pdfRaw.split(',')[1] || '', 'base64').toString('latin1');
+  assert.match(decoded, /OBJET DE LA FACTURE/);
+  assert.match(decoded, /Importation tabac brut/);
+  assert.match(decoded, /CONTRAT/);
+  assert.match(decoded, /CT-2026\/MTK-01/);
+  assert.match(decoded, /1\. Service Financier/);
+  assert.match(decoded, /2\. S\/D Tr/);
+  assert.doesNotMatch(decoded, /Agent Comptable/);
+  assert.doesNotMatch(decoded, /Controle de Gestion/);
+});
+
 

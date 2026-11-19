@@ -1,9 +1,11 @@
 import {
   CurrencyConsultation,
+  DashboardStats,
   FilterParams,
   Invoice,
   InvoicePaymentStatus,
   PaymentOrder,
+  PaymentStatus,
 } from '../types/payment';
 import { computeInvoicePaymentSummary } from './invoiceUtils';
 
@@ -258,3 +260,147 @@ export function computeConsultationAxisMetrics(
     recentConsultations,
   };
 }
+
+export function filterOrders(
+  orders: PaymentOrder[],
+  filters: FilterParams = {}
+): PaymentOrder[] {
+  return orders.filter(order => {
+    if (filters.status && filters.status !== 'ALL' && order.status !== filters.status) {
+      return false;
+    }
+    if (filters.currency && filters.currency !== 'ALL' && order.currency !== filters.currency) {
+      return false;
+    }
+    if (
+      filters.bank &&
+      filters.bank !== 'ALL' &&
+      order.bankId !== filters.bank &&
+      order.bankName !== filters.bank
+    ) {
+      return false;
+    }
+    if (
+      filters.supplier &&
+      filters.supplier !== 'ALL' &&
+      order.supplierId !== filters.supplier &&
+      !order.beneficiaryName.toLowerCase().includes(filters.supplier.toLowerCase())
+    ) {
+      return false;
+    }
+    if (filters.fiscalYear && filters.fiscalYear !== 'ALL') {
+      const orderYear = order.fiscalYear || new Date(order.createdAt).getFullYear();
+      if (orderYear !== Number(filters.fiscalYear)) return false;
+    }
+    if (filters.isDemo !== undefined && filters.isDemo !== 'ALL') {
+      if (order.isDemo !== filters.isDemo) return false;
+    }
+    if (filters.startDate) {
+      if (new Date(order.createdAt) < new Date(filters.startDate)) return false;
+    }
+    if (filters.endDate) {
+      const end = new Date(filters.endDate);
+      end.setHours(23, 59, 59, 999);
+      if (new Date(order.createdAt) > end) return false;
+    }
+    if (filters.searchQuery) {
+      const q = filters.searchQuery.toLowerCase();
+      const matches =
+        order.orderNumber.toLowerCase().includes(q) ||
+        order.beneficiaryName.toLowerCase().includes(q) ||
+        order.invoiceNumber.toLowerCase().includes(q) ||
+        (order.proformaNumber && order.proformaNumber.toLowerCase().includes(q)) ||
+        (order.contractNumber && order.contractNumber.toLowerCase().includes(q)) ||
+        (order.lcNumber && order.lcNumber.toLowerCase().includes(q)) ||
+        (order.domiciliationNumber && order.domiciliationNumber.toLowerCase().includes(q)) ||
+        order.bankName.toLowerCase().includes(q);
+      if (!matches) return false;
+    }
+    return true;
+  });
+}
+
+export function computeDashboardStatsFromOrders(
+  filtered: PaymentOrder[]
+): DashboardStats {
+  let totalEurAmount = 0;
+  let totalUsdAmount = 0;
+  let totalTndExecuted = 0;
+  const amountByCurrency: Record<string, number> = {};
+  const countByStatus: Record<PaymentStatus, number> = {
+    SAISI: 0,
+    TRANSMIS_SIGNATURE: 0,
+    SIGNE: 0,
+    DEPOSE_BANQUE: 0,
+    EN_ATTENTE_ACHAT_DEVISE: 0,
+    EXECUTE: 0,
+    ANNULE: 0,
+  };
+
+  const ordersByBank: Record<string, { count: number; totalTnd: number }> = {};
+  const monthlyMap: Record<
+    string,
+    { count: number; amountEur: number; amountUsd: number; executedTnd: number }
+  > = {};
+
+  filtered.forEach(o => {
+    if (countByStatus[o.status] !== undefined) {
+      countByStatus[o.status]++;
+    }
+
+    amountByCurrency[o.currency] = (amountByCurrency[o.currency] || 0) + o.amount;
+    if (o.currency === 'EUR') totalEurAmount += o.amount;
+    if (o.currency === 'USD') totalUsdAmount += o.amount;
+
+    if (o.status === 'EXECUTE' && o.debitAmountTnd) {
+      totalTndExecuted += o.debitAmountTnd;
+    }
+
+    const bankName = o.bankName || 'Non assignée';
+    if (!ordersByBank[bankName]) {
+      ordersByBank[bankName] = { count: 0, totalTnd: 0 };
+    }
+    ordersByBank[bankName].count++;
+    if (o.debitAmountTnd) {
+      ordersByBank[bankName].totalTnd += o.debitAmountTnd;
+    }
+
+    const date = new Date(o.createdAt);
+    const monthKey = `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}`;
+    if (!monthlyMap[monthKey]) {
+      monthlyMap[monthKey] = { count: 0, amountEur: 0, amountUsd: 0, executedTnd: 0 };
+    }
+    monthlyMap[monthKey].count++;
+    if (o.currency === 'EUR') monthlyMap[monthKey].amountEur += o.amount;
+    if (o.currency === 'USD') monthlyMap[monthKey].amountUsd += o.amount;
+    if (o.status === 'EXECUTE' && o.debitAmountTnd) {
+      monthlyMap[monthKey].executedTnd += o.debitAmountTnd;
+    }
+  });
+
+  const monthlyEvolution = Object.keys(monthlyMap)
+    .sort()
+    .map(month => ({
+      month,
+      ...monthlyMap[month],
+    }));
+
+  return {
+    totalOrders: filtered.length,
+    totalEurAmount,
+    totalUsdAmount,
+    totalTndExecuted,
+    amountByCurrency,
+    countByStatus,
+    saisiCount: countByStatus['SAISI'] || 0,
+    transmisSignatureCount: countByStatus['TRANSMIS_SIGNATURE'] || 0,
+    signeCount: countByStatus['SIGNE'] || 0,
+    depositedCount: countByStatus['DEPOSE_BANQUE'] || 0,
+    pendingExchangeCount: countByStatus['EN_ATTENTE_ACHAT_DEVISE'] || 0,
+    executedCount: countByStatus['EXECUTE'] || 0,
+    cancelledCount: countByStatus['ANNULE'] || 0,
+    ordersByBank,
+    monthlyEvolution,
+  };
+}
+

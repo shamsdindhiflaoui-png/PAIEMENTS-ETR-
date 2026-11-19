@@ -167,6 +167,50 @@ export interface ExchangeQuote {
 
 export type ConsultationStatus = 'OUVERTE' | 'CLOTUREE' | 'ANNULEE';
 
+export interface ConsultationPdfTextOverrides {
+  headerCompany?: string;
+  headerAddress?: string;
+  headerRc?: string;
+  headerTelFax?: string;
+  senderLabel?: string;
+  nbPrefix?: string;
+  contactPhone?: string;
+  contactEmail?: string;
+  sectionTitle?: string;
+  subjectLabel?: string;
+  subjectText?: string;
+  introLine?: string;
+  amountBulletLabel?: string;
+  amountBulletValue?: string;
+  operationDateBulletLabel?: string;
+  operationDateBulletValue?: string;
+  valueDateBulletLabel?: string;
+  valueDateBulletValue?: string;
+  quoteRequestParagraph?: string;
+  faxNumbers?: string;
+  validityParagraph?: string;
+  closingSalutation?: string;
+  signatureLabel?: string;
+  bankTableTitle?: string;
+  footerTraceability?: string;
+}
+
+export interface PurchaseConfirmationLetterTextOverrides {
+  destLabel?: string;
+  addressLabel?: string;
+  faxLabel?: string;
+  telLabel?: string;
+  dateText?: string;
+  confirmationRef?: string;
+  senderBoxTitle?: string;
+  senderBoxNb?: string;
+  sectionTitle?: string;
+  introText?: string;
+  bulletTexts?: string[];
+  closingText?: string;
+  signatureLabel?: string;
+}
+
 export interface CurrencyConsultation {
   id: string;
   consultationNumber: string; // Ex: CONS-2026-0001
@@ -194,6 +238,8 @@ export interface CurrencyConsultation {
   confirmationDate?: string; // YYYY-MM-DD
   valueDate?: string; // YYYY-MM-DD (Date valeur)
   notes?: string;
+  customPdfText?: ConsultationPdfTextOverrides;
+  customConfirmationTexts?: Record<string, PurchaseConfirmationLetterTextOverrides>;
   isDemo: boolean;
 }
 
@@ -240,6 +286,7 @@ export interface PurchaseConfirmationLetter {
   bctTransferCounterValueTnd?: number;
   footerEmails: string[];
   footerContacts?: BankConfirmationContact[];
+  textOverrides?: PurchaseConfirmationLetterTextOverrides;
 }
 
 /**

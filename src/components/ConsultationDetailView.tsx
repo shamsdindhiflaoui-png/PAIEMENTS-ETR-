@@ -23,6 +23,7 @@ import {
   Bank,
   CurrencyConsultation,
   ExchangeQuote,
+  Invoice,
   PaymentOrder,
   User,
 } from '../types/payment';
@@ -54,6 +55,7 @@ import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
 interface ConsultationDetailViewProps {
   consultation: CurrencyConsultation;
   orders: PaymentOrder[];
+  invoices?: Invoice[];
   consultations: CurrencyConsultation[];
   banks: Bank[];
   currentUser?: User;
@@ -87,6 +89,7 @@ interface ConsultationDetailViewProps {
 export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
   consultation,
   orders,
+  invoices = [],
   consultations,
   banks,
   currentUser,
@@ -338,7 +341,7 @@ export const ConsultationDetailView: React.FC<ConsultationDetailViewProps> = ({
 
           <button
             type="button"
-            onClick={() => downloadConsultationPdf(consultation)}
+            onClick={() => downloadConsultationPdf(consultation, undefined, orders, invoices)}
             className="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-blue-700 hover:bg-blue-800 rounded-lg transition-colors shadow-2xs"
           >
             <Download className="w-3.5 h-3.5" />

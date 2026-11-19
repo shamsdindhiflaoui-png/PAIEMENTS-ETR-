@@ -2,6 +2,7 @@ import React from 'react';
 import { X, Printer, Download, Scissors } from 'lucide-react';
 import { Invoice, PaymentOrder } from '../types/payment';
 import {
+  HALF_A4_SIGNATORIES,
   computeOrderPrintData,
   downloadHalfA4OrderPdf,
 } from '../utils/orderPrintSummary';
@@ -171,9 +172,7 @@ export const PrintOfficialOrderModal: React.FC<PrintOfficialOrderModalProps> = (
                   </div>
                 )}
                 <div className="text-[9.5px] font-mono text-neutral-700 truncate">
-                  {data.contractNumber
-                    ? `Contrat : ${data.contractNumber}`
-                    : `Date ordre : ${data.orderDateFormatted}`}
+                  Date ordre : {data.orderDateFormatted}
                 </div>
               </div>
             </div>
@@ -238,38 +237,41 @@ export const PrintOfficialOrderModal: React.FC<PrintOfficialOrderModalProps> = (
               )}
             </div>
 
-            {/* Row 4: Motif bref */}
-            <div className="text-[10px] text-neutral-800 px-0.5 truncate">
-              <strong className="uppercase text-[9px] text-neutral-600 mr-1.5">Objet :</strong>
-              <span>{data.purpose || '—'}</span>
+            {/* Row 4: Objet de la facture & Contrat */}
+            <div className="grid grid-cols-12 gap-2.5 text-[11px]">
+              <div className="col-span-8 border border-neutral-500 px-2.5 py-1.5 min-w-0">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-neutral-600">
+                  Objet de la facture
+                </div>
+                <div className="text-[10.5px] text-black font-medium leading-snug line-clamp-2">
+                  {data.invoicePurpose || '—'}
+                </div>
+              </div>
+              <div className="col-span-4 border border-neutral-500 px-2.5 py-1.5 min-w-0">
+                <div className="text-[9px] font-bold uppercase tracking-wider text-neutral-600">
+                  Contrat
+                </div>
+                <div className="text-[11px] font-mono font-bold text-black truncate mt-0.5">
+                  {data.contractNumber || '—'}
+                </div>
+              </div>
             </div>
 
-            {/* Row 5: 4 Visas Compacts */}
-            <div className="grid grid-cols-4 gap-2 pt-1 border-t border-neutral-900 text-center">
-              <div className="border border-neutral-400 p-1.5 min-h-[54px] flex flex-col justify-between">
-                <span className="text-[8.5px] font-bold uppercase text-neutral-800">
-                  1. Agent Comptable
-                </span>
-                <span className="text-[8px] font-mono text-neutral-500">Visa &amp; Date</span>
-              </div>
-              <div className="border border-neutral-400 p-1.5 min-h-[54px] flex flex-col justify-between">
-                <span className="text-[8.5px] font-bold uppercase text-neutral-800">
-                  2. Contrôle Gestion
-                </span>
-                <span className="text-[8px] font-mono text-neutral-500">Visa Budgétaire</span>
-              </div>
-              <div className="border border-neutral-400 p-1.5 min-h-[54px] flex flex-col justify-between">
-                <span className="text-[8.5px] font-bold uppercase text-neutral-800">
-                  3. Dir. Financier
-                </span>
-                <span className="text-[8px] font-mono text-neutral-500">Bon à Exécuter</span>
-              </div>
-              <div className="border border-neutral-400 bg-neutral-50 p-1.5 min-h-[54px] flex flex-col justify-between">
-                <span className="text-[8.5px] font-bold uppercase text-neutral-800">
-                  4. Banque MTK
-                </span>
-                <span className="text-[8px] font-mono text-neutral-500">Cachet &amp; SWIFT</span>
-              </div>
+            {/* Row 5: 2 Signataires (Service Financier & S/D Trésorerie) */}
+            <div className="grid grid-cols-2 gap-3 pt-1 border-t border-neutral-900 text-center">
+              {HALF_A4_SIGNATORIES.map(signatory => (
+                <div
+                  key={signatory.title}
+                  className="border border-neutral-600 p-2 min-h-[60px] flex flex-col justify-between"
+                >
+                  <span className="text-[9.5px] font-bold uppercase tracking-wide text-black">
+                    {signatory.title}
+                  </span>
+                  <span className="text-[8.5px] font-mono text-neutral-500">
+                    {signatory.subtitle}
+                  </span>
+                </div>
+              ))}
             </div>
 
             {/* Footer */}
