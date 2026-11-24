@@ -13,6 +13,7 @@ import {
   FileCheck,
   Trash2,
   Eye,
+  Download,
   Info,
   FileSpreadsheet,
   Lock,
@@ -37,12 +38,17 @@ import { api } from '../services/api';
 import {
   DEDUCTION_CATEGORY_META,
   computeInvoicePaymentSummary,
+  doesInvoiceRequireConversion,
   getAvailableInvoicesForOrder,
   getInvoiceDefinitiveRef,
+  getInvoiceDocumentType,
   getInvoiceProformaRef,
   getSuggestedNextTranche,
+  isProformaConverted,
   validateOrderAgainstInvoice,
 } from '../utils/invoiceUtils';
+import { AttachmentViewerModal } from './AttachmentViewerModal';
+import { PreviewableDocumentItem } from '../utils/documentPreview';
 
 interface NewOrderViewProps {
   suppliers: Supplier[];
@@ -141,6 +147,11 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
   const [documents, setDocuments] = useState<Array<Omit<PaymentDocument, 'id' | 'orderId'>>>([]);
   const [docUploadName, setDocUploadName] = useState<string>('');
   const [docUploadType, setDocUploadType] = useState<DocumentType>('FACTURE');
+  const [viewerState, setViewerState] = useState<{
+    documents: PreviewableDocumentItem[];
+    initialIndex: number;
+    title?: string;
+  } | null>(null);
 
   // Validation & Loading
   const [isSubmitting, setIsSubmitting] = useState<boolean>(false);
@@ -276,6 +287,17 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
     invOverride?: Invoice | null
   ) => {
     const inv = invOverride ?? selectedInvoice;
+    if (
+      nextBasis === 'PROFORMA' &&
+      inv &&
+      doesInvoiceRequireConversion(
+        inv,
+        selectedInvoiceSummary?.linkedOrders.length ??
+          computeInvoicePaymentSummary(inv, orders).linkedOrders.length
+      )
+    ) {
+      return;
+    }
     setDocumentBasis(nextBasis);
     if (!inv) return;
 
@@ -322,15 +344,13 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
     setInlineDefinitiveNumber('');
     setInlineDefinitiveDate(today);
 
-    if (suggestion.isMixedScheme && summary.linkedOrders.length === 0) {
+    if (suggestion.documentType === 'PROFORMA' && !suggestion.requiresConversionToInvoice) {
       setTransferPurpose(
-        `Ouverture LC 50 % sur Proforma ${profRef?.number || found.invoiceNumber}`
+        `Ouverture sur Proforma ${profRef?.number || found.invoiceNumber}`
       );
-    } else if (suggestion.isMixedScheme) {
+    } else if (suggestion.requiresConversionToInvoice) {
       setTransferPurpose(
-        `Solde 50 % Virement sur Facture Définitive${
-          defRef ? ` ${defRef.number}` : ''
-        }`
+        `Règlement sur Facture (conversion Proforma ${profRef?.number || found.invoiceNumber})`
       );
     } else {
       setTransferPurpose(
@@ -478,21 +498,41 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
     }
     const selectedProfRef = selectedInvoice ? getInvoiceProformaRef(selectedInvoice) : null;
     const selectedDefRef = selectedInvoice ? getInvoiceDefinitiveRef(selectedInvoice) : null;
+    const requiresConversion =
+      selectedInvoice && selectedInvoiceSummary
+        ? doesInvoiceRequireConversion(selectedInvoice, selectedInvoiceSummary.linkedOrders.length)
+        : false;
+    const effectiveDocumentBasis: InvoiceDocumentBasis = requiresConversion
+      ? 'FACTURE_DEFINITIVE'
+      : documentBasis;
+
     const effectiveInvoiceNumber = (
-      selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+      selectedInvoice && effectiveDocumentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
         ? inlineDefinitiveNumber || invoiceNumber
         : invoiceNumber
     ).trim();
     const effectiveInvoiceDate =
-      selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+      selectedInvoice && effectiveDocumentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
         ? inlineDefinitiveDate || invoiceDate
         : invoiceDate;
 
     if (!effectiveInvoiceNumber) {
       setErrorMsg(
-        selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
-          ? 'Veuillez saisir le N° de la Facture Définitive reçue pour cet ordre.'
+        selectedInvoice && effectiveDocumentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+          ? 'Veuillez saisir la nouvelle référence de Facture pour convertir la Proforma.'
           : 'La référence de la facture est obligatoire.'
+      );
+      return;
+    }
+    if (
+      selectedInvoice &&
+      effectiveDocumentBasis === 'FACTURE_DEFINITIVE' &&
+      !selectedDefRef &&
+      selectedProfRef &&
+      effectiveInvoiceNumber.toLowerCase() === selectedProfRef.number.toLowerCase()
+    ) {
+      setErrorMsg(
+        `La nouvelle référence de Facture doit être différente de la référence Proforma (${selectedProfRef.number}).`
       );
       return;
     }
@@ -566,12 +606,12 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
         amountInWords: amountInWords || numberToFrenchWords(parsedAmount, currency),
         transferPurpose: transferPurpose || purpose,
         invoiceId: selectedInvoiceId || undefined,
-        documentBasis: selectedInvoice ? documentBasis : 'FACTURE_DEFINITIVE',
+        documentBasis: selectedInvoice ? effectiveDocumentBasis : 'FACTURE_DEFINITIVE',
         invoiceNumber: effectiveInvoiceNumber,
         invoiceDate: effectiveInvoiceDate,
         proformaNumber: selectedProfRef?.number,
         proformaDate: selectedProfRef?.date,
-        ...(selectedInvoice && documentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
+        ...(selectedInvoice && effectiveDocumentBasis === 'FACTURE_DEFINITIVE' && !selectedDefRef
           ? {
               definitiveInvoiceNumber: effectiveInvoiceNumber,
               definitiveInvoiceDate: effectiveInvoiceDate,
@@ -660,16 +700,26 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
             {availableInvoices.map(({ invoice, summary }) => {
               const pRef = getInvoiceProformaRef(invoice);
               const dRef = getInvoiceDefinitiveRef(invoice);
+              const docType = getInvoiceDocumentType(invoice);
+              const mustConvert = doesInvoiceRequireConversion(
+                invoice,
+                summary.linkedOrders.length
+              );
               const refLabel =
                 pRef && dRef
-                  ? `${dRef.number} (Proforma ${pRef.number})`
+                  ? `${dRef.number} (ex-Proforma ${pRef.number})`
                   : pRef && !dRef
                   ? `Proforma ${pRef.number}`
                   : invoice.invoiceNumber;
+              const statusSuffix = mustConvert
+                ? ' [À convertir en Facture]'
+                : docType === 'PROFORMA'
+                ? ' [Proforma]'
+                : '';
               return (
                 <option key={invoice.id} value={invoice.id}>
                   {refLabel} — {invoice.supplierName}
-                  {invoice.paymentScheme === '50_LC_50_VIREMENT' ? ' [50% LC / 50% Vir.]' : ''} — Reste :{' '}
+                  {statusSuffix} — Reste :{' '}
                   {summary.remainingAmount.toLocaleString('fr-FR', {
                     minimumFractionDigits: 2,
                     maximumFractionDigits: 2,
@@ -702,21 +752,57 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
           const netInvalidAfterDeductions = deductionsTotal > 0 && parsedNet <= 0;
           const profRef = getInvoiceProformaRef(selectedInvoice);
           const defRef = getInvoiceDefinitiveRef(selectedInvoice);
-          const halfAmount = Number((selectedInvoice.totalAmount / 2).toFixed(2));
-          const suggestion = getSuggestedNextTranche(selectedInvoice, selectedInvoiceSummary);
+          const docType = getInvoiceDocumentType(selectedInvoice);
+          const convertedFromProforma = isProformaConverted(selectedInvoice);
+          const requiresConversion = doesInvoiceRequireConversion(
+            selectedInvoice,
+            selectedInvoiceSummary.linkedOrders.length
+          );
+          const sameAsProformaError =
+            Boolean(profRef?.number) &&
+            inlineDefinitiveNumber.trim().length > 0 &&
+            inlineDefinitiveNumber.trim().toLowerCase() === profRef!.number.toLowerCase();
 
           return (
             <div className="p-4 rounded-xl bg-blue-50/60 border border-blue-200 space-y-4">
-              {selectedInvoice.paymentScheme === '50_LC_50_VIREMENT' && (
+              {requiresConversion && (
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 text-xs text-amber-950 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="font-bold">Conversion obligatoire en Facture · </span>
+                    <span>
+                      Le 1er ordre sur la Proforma {profRef?.number} a déjà été saisi. Veuillez saisir une nouvelle référence de Facture pour poursuivre.
+                    </span>
+                  </div>
+                  <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-amber-300 font-bold">
+                    Proforma : {profRef?.number}
+                  </span>
+                </div>
+              )}
+
+              {docType === 'PROFORMA' && !requiresConversion && (
                 <div className="p-3 rounded-lg bg-indigo-50 border border-indigo-200 text-xs text-indigo-950 flex flex-wrap items-center justify-between gap-2">
                   <div>
-                    <span className="font-bold">Dossier Mixte 50 % LC + 50 % Virement · </span>
-                    <span>{suggestion.label}</span>
+                    <span className="font-bold">Dossier Proforma · </span>
+                    <span>
+                      1er ordre (LC ou 1re tranche) sur Proforma. Après la saisie du 1er ordre, la Proforma devra être convertie en Facture avec une nouvelle référence.
+                    </span>
                   </div>
-                  <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-indigo-200">
-                    {profRef ? `Proforma : ${profRef.number}` : ''}
-                    {profRef && defRef ? ' · ' : ''}
-                    {defRef ? `Facture Déf. : ${defRef.number}` : ''}
+                  {profRef && (
+                    <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-indigo-200">
+                      Proforma : {profRef.number}
+                    </span>
+                  )}
+                </div>
+              )}
+
+              {convertedFromProforma && (
+                <div className="p-3 rounded-lg bg-emerald-50 border border-emerald-200 text-xs text-emerald-950 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="font-bold">Proforma convertie en Facture · </span>
+                    <span>Le dossier est désormais rattaché à la référence de Facture officielle.</span>
+                  </div>
+                  <span className="font-mono text-[11px] bg-white px-2 py-0.5 rounded border border-emerald-200">
+                    Facture : {defRef?.number} (ex-Proforma {profRef?.number})
                   </span>
                 </div>
               )}
@@ -769,27 +855,31 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                 </div>
               </div>
 
-              {/* Document justificatif de cet ordre (Proforma vs Facture Définitive) */}
-              {(profRef || selectedInvoice.paymentScheme === '50_LC_50_VIREMENT') && (
+              {/* Document justificatif de cet ordre (Proforma vs Conversion Facture) */}
+              {profRef && (
                 <div className="bg-white rounded-xl border border-slate-200 p-3.5 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-2">
                     <span className="text-xs font-bold text-slate-800">
                       Document justificatif de cet ordre
                     </span>
                     <div className="flex flex-wrap items-center gap-2">
-                      {profRef && (
-                        <button
-                          type="button"
-                          onClick={() => handleDocumentBasisChange('PROFORMA')}
-                          className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                            documentBasis === 'PROFORMA'
-                              ? 'bg-indigo-700 text-white border-indigo-700'
-                              : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
-                          }`}
-                        >
-                          Proforma ({profRef.number})
-                        </button>
-                      )}
+                      <button
+                        type="button"
+                        disabled={requiresConversion}
+                        onClick={() => handleDocumentBasisChange('PROFORMA')}
+                        title={
+                          requiresConversion
+                            ? 'Le 1er ordre est déjà saisi : conversion en Facture obligatoire'
+                            : 'Établir cet ordre sur la Proforma'
+                        }
+                        className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
+                          documentBasis === 'PROFORMA'
+                            ? 'bg-indigo-700 text-white border-indigo-700'
+                            : 'bg-slate-50 text-slate-700 border-slate-300 hover:bg-slate-100'
+                        } disabled:opacity-45 disabled:cursor-not-allowed`}
+                      >
+                        Proforma ({profRef.number})
+                      </button>
                       <button
                         type="button"
                         onClick={() => handleDocumentBasisChange('FACTURE_DEFINITIVE')}
@@ -800,8 +890,8 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                         }`}
                       >
                         {defRef
-                          ? `Facture Définitive (${defRef.number})`
-                          : 'Facture Définitive (à saisir)'}
+                          ? `Facture (${defRef.number})`
+                          : 'Convertir en Facture (nouvelle réf.)'}
                       </button>
                     </div>
                   </div>
@@ -809,28 +899,37 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                   {documentBasis === 'FACTURE_DEFINITIVE' && !defRef && (
                     <div className="p-3 rounded-lg bg-amber-50 border border-amber-300 space-y-2.5">
                       <div className="text-xs font-bold text-amber-950">
-                        Renseigner la Facture Définitive reçue pour ce Virement (sans modifier le montant total du dossier)
+                        Convertir la Proforma {profRef.number} en Facture avec une nouvelle référence (sans modifier le montant total du dossier)
                       </div>
                       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                         <div>
                           <label className="block text-[11px] font-semibold text-amber-950 mb-1">
-                            N° Facture Définitive <span className="text-rose-500">*</span>
+                            Nouvelle Réf. Facture <span className="text-rose-500">*</span>
                           </label>
                           <input
                             type="text"
-                            placeholder="Ex : FAC-DEF-2026-088"
+                            placeholder="Ex : FAC-2026-088"
                             value={inlineDefinitiveNumber}
                             onChange={e => {
                               const val = e.target.value;
                               setInlineDefinitiveNumber(val);
                               setInvoiceNumber(val);
                             }}
-                            className="w-full bg-white border border-amber-300 rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600"
+                            className={`w-full bg-white border rounded-lg px-3 py-1.5 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 ${
+                              sameAsProformaError
+                                ? 'border-rose-400 focus:ring-rose-500'
+                                : 'border-amber-300 focus:ring-amber-600'
+                            }`}
                           />
+                          {sameAsProformaError && (
+                            <p className="text-[11px] text-rose-700 font-medium mt-1">
+                              La nouvelle référence de Facture doit être différente de {profRef.number}.
+                            </p>
+                          )}
                         </div>
                         <div>
                           <label className="block text-[11px] font-semibold text-amber-950 mb-1">
-                            Date Facture Définitive
+                            Date de la Facture
                           </label>
                           <input
                             type="date"
@@ -897,25 +996,6 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
                 >
                   Règlement total du solde ({selectedInvoiceSummary.remainingAmount.toLocaleString('fr-FR')} {selectedInvoice.currency})
                 </button>
-                {selectedInvoice.paymentScheme === '50_LC_50_VIREMENT' &&
-                  halfAmount < selectedInvoiceSummary.remainingAmount - 0.005 && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setPaymentMode('PARTIAL');
-                        setGrossAmountInput(String(halfAmount));
-                        syncNetFromGross(halfAmount, deductionsTotal);
-                      }}
-                      className={`px-3 py-1.5 rounded-lg text-xs font-semibold border transition-colors ${
-                        paymentMode === 'PARTIAL' &&
-                        Math.abs((parseFloat(grossAmountInput) || 0) - halfAmount) <= 0.01
-                          ? 'bg-indigo-700 text-white border-indigo-700'
-                          : 'bg-white text-indigo-800 border-indigo-300 hover:bg-indigo-50'
-                      }`}
-                    >
-                      50 % Tranche ({halfAmount.toLocaleString('fr-FR')} {selectedInvoice.currency})
-                    </button>
-                  )}
                 <button
                   type="button"
                   onClick={() => {
@@ -1763,51 +1843,97 @@ export const NewOrderView: React.FC<NewOrderViewProps> = ({
         </div>
 
         {/* Documents List */}
-        {documents.length > 0 && (
-          <div className="space-y-2 pt-2">
-            {documents.map((doc, idx) => (
-              <div
-                key={idx}
-                className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs"
-              >
-                <div className="flex items-center gap-3 min-w-0">
-                  <div className="w-8 h-8 rounded-md bg-white border border-slate-200 flex items-center justify-center text-blue-700">
-                    <FileText className="w-4 h-4" />
-                  </div>
-                  <div className="min-w-0">
-                    <div className="font-semibold text-slate-900 truncate">{doc.name}</div>
-                    <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
-                      <span className="font-medium text-blue-700">{doc.type}</span>
-                      <span aria-hidden="true">·</span>
-                      <span className="font-mono">{(doc.size / 1024).toFixed(1)} Ko</span>
+        {documents.length > 0 && (() => {
+          const previewDocs: PreviewableDocumentItem[] = documents.map(d => ({
+            ...d,
+            sourceKind: !d.dataBase64 && selectedInvoiceId ? 'INVOICE' : 'DRAFT',
+            sourceEntityId: !d.dataBase64 && selectedInvoiceId ? selectedInvoiceId : undefined,
+            sourceLabel: 'Nouvel Ordre',
+          }));
+          return (
+            <div className="space-y-2 pt-2">
+              {documents.map((doc, idx) => (
+                <div
+                  key={idx}
+                  className="flex items-center justify-between p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs"
+                >
+                  <div className="flex items-center gap-3 min-w-0">
+                    <div className="w-8 h-8 rounded-md bg-white border border-slate-200 flex items-center justify-center text-blue-700">
+                      <FileText className="w-4 h-4" />
+                    </div>
+                    <div className="min-w-0">
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setViewerState({
+                            documents: previewDocs,
+                            initialIndex: idx,
+                            title: 'Pièces jointes du nouvel ordre',
+                          })
+                        }
+                        className="font-semibold text-slate-900 hover:text-blue-700 hover:underline truncate block text-left"
+                      >
+                        {doc.name}
+                      </button>
+                      <div className="text-[11px] text-slate-500 flex items-center gap-1.5">
+                        <span className="font-medium text-blue-700">{doc.type}</span>
+                        <span aria-hidden="true">·</span>
+                        <span className="font-mono">{(doc.size / 1024).toFixed(1)} Ko</span>
+                      </div>
                     </div>
                   </div>
-                </div>
-                <div className="flex items-center gap-2">
-                  {doc.dataBase64 && (
-                    <a
-                      href={doc.dataBase64}
-                      download={doc.name}
-                      className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"
-                      title="Télécharger"
+                  <div className="flex items-center gap-1.5">
+                    {(doc.dataBase64 || selectedInvoiceId) && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setViewerState({
+                            documents: previewDocs,
+                            initialIndex: idx,
+                            title: 'Pièces jointes du nouvel ordre',
+                          })
+                        }
+                        className="inline-flex items-center gap-1 px-2.5 py-1 text-blue-700 bg-white hover:bg-blue-50 border border-blue-200 rounded font-semibold transition-colors"
+                        title="Aperçu intégré"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Aperçu</span>
+                      </button>
+                    )}
+                    {doc.dataBase64 && (
+                      <a
+                        href={doc.dataBase64}
+                        download={doc.name}
+                        className="p-1.5 text-slate-500 hover:text-blue-700 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"
+                        title="Télécharger"
+                      >
+                        <Download className="w-4 h-4" />
+                      </a>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => removeDoc(idx)}
+                      className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"
+                      title="Supprimer"
                     >
-                      <Eye className="w-4 h-4" />
-                    </a>
-                  )}
-                  <button
-                    type="button"
-                    onClick={() => removeDoc(idx)}
-                    className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-white rounded border border-transparent hover:border-slate-200 transition-colors"
-                    title="Supprimer"
-                  >
-                    <Trash2 className="w-4 h-4" />
-                  </button>
+                      <Trash2 className="w-4 h-4" />
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ))}
-          </div>
-        )}
+              ))}
+            </div>
+          );
+        })()}
       </div>
+
+      {viewerState && (
+        <AttachmentViewerModal
+          documents={viewerState.documents}
+          initialIndex={viewerState.initialIndex}
+          title={viewerState.title}
+          onClose={() => setViewerState(null)}
+        />
+      )}
 
       {/* Action Buttons Toolbar */}
       <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pt-4 border-t border-slate-200">

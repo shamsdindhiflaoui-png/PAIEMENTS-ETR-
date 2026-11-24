@@ -10,8 +10,11 @@ import {
   canEditOrderDeductions,
   validateExistingOrderDeductionsUpdate,
   doesOrderBelongToInvoice,
+  doesInvoiceRequireConversion,
   findReferenceConflict,
+  getInvoiceDocumentType,
   getSuggestedNextTranche,
+  isProformaConverted,
   resolveOrderDocumentSnapshot,
 } from './invoiceUtils';
 import { Invoice, OrderDeduction, PaymentOrder } from '../types/payment';
@@ -372,31 +375,40 @@ test('validateExistingOrderDeductionsUpdate enforces net > 0, positive amounts, 
   assert.match(lockedUpdate.error || '', /exécuté/i);
 });
 
-test('50% LC (Proforma) + 50% Virement (Facture Définitive) single dossier lifecycle keeps totalAmount fixed and prevents duplicates', () => {
-  const mixedProformaDossier: Invoice = {
+test('Proforma -> Facture lifecycle: 1st order on Proforma allowed, then mandatory conversion to Facture with a strictly new reference', () => {
+  const proformaDossier: Invoice = {
     ...BASE_INVOICE,
-    id: 'inv_mixed',
+    id: 'inv_prof',
+    documentType: 'PROFORMA',
     invoiceNumber: 'PROF-2026-500',
     invoiceDate: '2026-03-01',
     proformaNumber: 'PROF-2026-500',
     proformaDate: '2026-03-01',
-    paymentScheme: '50_LC_50_VIREMENT',
+    paymentScheme: 'STANDARD',
     totalAmount: 100000,
   };
 
-  // Tranche 1 suggestion: 50% LC on Proforma
-  const summary0 = computeInvoicePaymentSummary(mixedProformaDossier, []);
-  const s1 = getSuggestedNextTranche(mixedProformaDossier, summary0);
-  assert.equal(s1.isMixedScheme, true);
+  assert.equal(getInvoiceDocumentType(BASE_INVOICE), 'FACTURE');
+  assert.equal(getInvoiceDocumentType(proformaDossier), 'PROFORMA');
+  assert.equal(isProformaConverted(proformaDossier), false);
+  assert.equal(doesInvoiceRequireConversion(proformaDossier, 0), false);
+  assert.equal(doesInvoiceRequireConversion(proformaDossier, 1), true);
+
+  // 1st order suggestion on Proforma: LC on PROFORMA, no conversion forced yet
+  const summary0 = computeInvoicePaymentSummary(proformaDossier, []);
+  const s1 = getSuggestedNextTranche(proformaDossier, summary0);
+  assert.equal(s1.documentType, 'PROFORMA');
+  assert.equal(s1.requiresConversionToInvoice, false);
   assert.equal(s1.transferType, 'LC');
   assert.equal(s1.documentBasis, 'PROFORMA');
-  assert.equal(s1.paymentMode, 'PARTIAL');
-  assert.equal(s1.suggestedGrossAmount, 50000);
+  assert.equal(s1.paymentMode, 'FULL');
+  assert.equal(s1.suggestedGrossAmount, 100000);
 
   const snap1 = resolveOrderDocumentSnapshot({
-    invoice: mixedProformaDossier,
+    invoice: proformaDossier,
     documentBasis: s1.documentBasis,
-    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+    existingInvoices: [BASE_INVOICE, proformaDossier],
+    existingLinkedOrdersCount: 0,
   });
   assert.equal(snap1.valid, true);
   assert.equal(snap1.documentBasis, 'PROFORMA');
@@ -404,9 +416,9 @@ test('50% LC (Proforma) + 50% Virement (Facture Définitive) single dossier life
   assert.equal(snap1.proformaNumber, 'PROF-2026-500');
   assert.equal(snap1.invoiceDefinitiveAttach, undefined);
 
-  const lcOrder = makeOrder({
-    id: 'ord_lc_50',
-    invoiceId: 'inv_mixed',
+  const firstLcOrder = makeOrder({
+    id: 'ord_lc_1',
+    invoiceId: 'inv_prof',
     documentBasis: 'PROFORMA',
     invoiceNumber: 'PROF-2026-500',
     invoiceDate: '2026-03-01',
@@ -418,65 +430,96 @@ test('50% LC (Proforma) + 50% Virement (Facture Définitive) single dossier life
     grossAmount: 50000,
   });
 
-  // Tranche 2 suggestion after LC order: 50% VIREMENT on Facture Définitive
-  const summaryAfterLc = computeInvoicePaymentSummary(mixedProformaDossier, [lcOrder]);
-  assert.equal(summaryAfterLc.remainingAmount, 50000);
-  assert.equal(summaryAfterLc.progressPercent, 50);
+  // After 1st order is entered, conversion to Facture with a new ref becomes mandatory
+  const summaryAfterFirst = computeInvoicePaymentSummary(proformaDossier, [firstLcOrder]);
+  assert.equal(summaryAfterFirst.remainingAmount, 50000);
+  assert.equal(summaryAfterFirst.progressPercent, 50);
 
-  const s2 = getSuggestedNextTranche(mixedProformaDossier, summaryAfterLc);
+  const s2 = getSuggestedNextTranche(proformaDossier, summaryAfterFirst);
+  assert.equal(s2.requiresConversionToInvoice, true);
   assert.equal(s2.transferType, 'VIREMENT');
   assert.equal(s2.documentBasis, 'FACTURE_DEFINITIVE');
   assert.equal(s2.paymentMode, 'FULL');
   assert.equal(s2.suggestedGrossAmount, 50000);
 
-  // Attempting Tranche 2 without Facture Définitive must fail cleanly
-  const missingDef = resolveOrderDocumentSnapshot({
-    invoice: mixedProformaDossier,
-    documentBasis: 'FACTURE_DEFINITIVE',
-    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+  // Attempting 2nd order still on PROFORMA must be blocked
+  const blockedProformaSecondOrder = resolveOrderDocumentSnapshot({
+    invoice: proformaDossier,
+    documentBasis: 'PROFORMA',
+    existingInvoices: [BASE_INVOICE, proformaDossier],
+    existingLinkedOrdersCount: 1,
   });
-  assert.equal(missingDef.valid, false);
-  assert.match(missingDef.error || '', /Facture Définitive/i);
+  assert.equal(blockedProformaSecondOrder.valid, false);
+  assert.match(blockedProformaSecondOrder.error || '', /convertir la Proforma en Facture/i);
 
-  // Conflict check against another invoice's number must fail
+  // Attempting 2nd order without new Facture ref must fail
+  const missingNewRef = resolveOrderDocumentSnapshot({
+    invoice: proformaDossier,
+    documentBasis: 'FACTURE_DEFINITIVE',
+    existingInvoices: [BASE_INVOICE, proformaDossier],
+    existingLinkedOrdersCount: 1,
+  });
+  assert.equal(missingNewRef.valid, false);
+  assert.match(missingNewRef.error || '', /convertir la Proforma en Facture/i);
+
+  // Attempting to reuse the same Proforma reference as the new Facture ref must fail
+  const sameAsProforma = resolveOrderDocumentSnapshot({
+    invoice: proformaDossier,
+    documentBasis: 'FACTURE_DEFINITIVE',
+    inlineDefinitiveNumber: 'PROF-2026-500',
+    inlineDefinitiveDate: '2026-03-20',
+    existingInvoices: [BASE_INVOICE, proformaDossier],
+    existingLinkedOrdersCount: 1,
+  });
+  assert.equal(sameAsProforma.valid, false);
+  assert.match(sameAsProforma.error || '', /différente de la référence Proforma/i);
+
+  // Conflict check against another invoice's reference must fail
   const conflictSnap = resolveOrderDocumentSnapshot({
-    invoice: mixedProformaDossier,
+    invoice: proformaDossier,
     documentBasis: 'FACTURE_DEFINITIVE',
     inlineDefinitiveNumber: 'FAC-2026-0100',
     inlineDefinitiveDate: '2026-03-20',
-    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+    existingInvoices: [BASE_INVOICE, proformaDossier],
+    existingLinkedOrdersCount: 1,
   });
   assert.equal(conflictSnap.valid, false);
   assert.match(conflictSnap.error || '', /FAC-2026-0100/);
 
-  // Valid inline Facture Définitive attachment keeps totalAmount untouched and attaches metadata
-  const validSnap2 = resolveOrderDocumentSnapshot({
-    invoice: mixedProformaDossier,
+  // Valid conversion with a strictly new Facture reference attaches definitiveInvoiceNumber & keeps Proforma recall
+  const validConversionSnap = resolveOrderDocumentSnapshot({
+    invoice: proformaDossier,
     documentBasis: 'FACTURE_DEFINITIVE',
     inlineDefinitiveNumber: 'FAC-DEF-2026-777',
     inlineDefinitiveDate: '2026-03-20',
-    existingInvoices: [BASE_INVOICE, mixedProformaDossier],
+    existingInvoices: [BASE_INVOICE, proformaDossier],
+    existingLinkedOrdersCount: 1,
   });
-  assert.equal(validSnap2.valid, true);
-  assert.equal(validSnap2.invoiceNumber, 'FAC-DEF-2026-777');
-  assert.equal(validSnap2.invoiceDate, '2026-03-20');
-  assert.equal(validSnap2.proformaNumber, 'PROF-2026-500');
-  assert.deepEqual(validSnap2.invoiceDefinitiveAttach, {
+  assert.equal(validConversionSnap.valid, true);
+  assert.equal(validConversionSnap.invoiceNumber, 'FAC-DEF-2026-777');
+  assert.equal(validConversionSnap.invoiceDate, '2026-03-20');
+  assert.equal(validConversionSnap.proformaNumber, 'PROF-2026-500');
+  assert.deepEqual(validConversionSnap.invoiceDefinitiveAttach, {
     definitiveInvoiceNumber: 'FAC-DEF-2026-777',
     definitiveInvoiceDate: '2026-03-20',
   });
 
-  // Once Facture Définitive is attached on the single dossier, total remains 100,000 and both orders belong to it
-  const updatedDossier: Invoice = {
-    ...mixedProformaDossier,
+  // Once converted, documentType becomes FACTURE, isProformaConverted is true, totalAmount stays 100,000 and both orders belong to it
+  const convertedDossier: Invoice = {
+    ...proformaDossier,
+    documentType: 'FACTURE',
     invoiceNumber: 'FAC-DEF-2026-777',
     invoiceDate: '2026-03-20',
     definitiveInvoiceNumber: 'FAC-DEF-2026-777',
     definitiveInvoiceDate: '2026-03-20',
   };
-  const virementOrder = makeOrder({
-    id: 'ord_vir_50',
-    invoiceId: undefined, // even matched by ref number alone
+  assert.equal(getInvoiceDocumentType(convertedDossier), 'FACTURE');
+  assert.equal(isProformaConverted(convertedDossier), true);
+  assert.equal(doesInvoiceRequireConversion(convertedDossier, 1), false);
+
+  const secondOrder = makeOrder({
+    id: 'ord_vir_2',
+    invoiceId: undefined,
     documentBasis: 'FACTURE_DEFINITIVE',
     invoiceNumber: 'FAC-DEF-2026-777',
     invoiceDate: '2026-03-20',
@@ -486,22 +529,22 @@ test('50% LC (Proforma) + 50% Virement (Facture Définitive) single dossier life
     amount: 50000,
     grossAmount: 50000,
   });
-  const lcOrderByRefOnly = { ...lcOrder, invoiceId: undefined };
+  const firstOrderByRefOnly = { ...firstLcOrder, invoiceId: undefined };
 
-  assert.equal(doesOrderBelongToInvoice(lcOrderByRefOnly, updatedDossier), true);
-  assert.equal(doesOrderBelongToInvoice(virementOrder, updatedDossier), true);
+  assert.equal(doesOrderBelongToInvoice(firstOrderByRefOnly, convertedDossier), true);
+  assert.equal(doesOrderBelongToInvoice(secondOrder, convertedDossier), true);
 
-  const finalSummary = computeInvoicePaymentSummary(updatedDossier, [
-    lcOrderByRefOnly,
-    virementOrder,
+  const finalSummary = computeInvoicePaymentSummary(convertedDossier, [
+    firstOrderByRefOnly,
+    secondOrder,
   ]);
   assert.equal(finalSummary.allocatedAmount, 100000);
   assert.equal(finalSummary.remainingAmount, 0);
   assert.equal(finalSummary.progressPercent, 100);
   assert.equal(finalSummary.paymentStatus, 'PAYEE');
 
-  assert.ok(findReferenceConflict(['PROF-2026-500'], [updatedDossier]));
-  assert.equal(findReferenceConflict(['PROF-2026-500'], [updatedDossier], 'inv_mixed'), null);
+  assert.ok(findReferenceConflict(['PROF-2026-500'], [convertedDossier]));
+  assert.equal(findReferenceConflict(['PROF-2026-500'], [convertedDossier], 'inv_prof'), null);
 });
 
 

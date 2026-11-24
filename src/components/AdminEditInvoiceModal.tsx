@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { AlertCircle, Save, ShieldCheck, X } from 'lucide-react';
-import { Invoice, InvoicePaymentScheme, Supplier } from '../types/payment';
+import { Invoice, InvoiceDocumentType, Supplier } from '../types/payment';
+import { getInvoiceDocumentType } from '../utils/invoiceUtils';
 
 interface AdminEditInvoiceModalProps {
   invoice: Invoice;
@@ -21,18 +22,19 @@ export const AdminEditInvoiceModal: React.FC<AdminEditInvoiceModalProps> = ({
   onSave,
   onClose,
 }) => {
-  const [paymentScheme, setPaymentScheme] = useState<InvoicePaymentScheme>(
-    invoice.paymentScheme === '50_LC_50_VIREMENT' ? '50_LC_50_VIREMENT' : 'STANDARD'
+  const initialDocType = getInvoiceDocumentType(invoice);
+  const [documentType, setDocumentType] = useState<InvoiceDocumentType>(initialDocType);
+  const [invoiceNumber, setInvoiceNumber] = useState(
+    invoice.definitiveInvoiceNumber || invoice.invoiceNumber
   );
-  const [invoiceNumber, setInvoiceNumber] = useState(invoice.invoiceNumber);
-  const [invoiceDate, setInvoiceDate] = useState(invoice.invoiceDate);
-  const [proformaNumber, setProformaNumber] = useState(invoice.proformaNumber || '');
-  const [proformaDate, setProformaDate] = useState(invoice.proformaDate || '');
-  const [definitiveInvoiceNumber, setDefinitiveInvoiceNumber] = useState(
-    invoice.definitiveInvoiceNumber || ''
+  const [invoiceDate, setInvoiceDate] = useState(
+    invoice.definitiveInvoiceDate || invoice.invoiceDate
   );
-  const [definitiveInvoiceDate, setDefinitiveInvoiceDate] = useState(
-    invoice.definitiveInvoiceDate || ''
+  const [proformaNumber, setProformaNumber] = useState(
+    invoice.proformaNumber || (initialDocType === 'PROFORMA' ? invoice.invoiceNumber : '')
+  );
+  const [proformaDate, setProformaDate] = useState(
+    invoice.proformaDate || (initialDocType === 'PROFORMA' ? invoice.invoiceDate : '')
   );
   const [dueDate, setDueDate] = useState(invoice.dueDate || '');
   const [contractNumber, setContractNumber] = useState(invoice.contractNumber || '');
@@ -65,14 +67,41 @@ export const AdminEditInvoiceModal: React.FC<AdminEditInvoiceModalProps> = ({
     }
   };
 
+  const handleDocumentTypeChange = (nextType: InvoiceDocumentType) => {
+    setDocumentType(nextType);
+    if (nextType === 'PROFORMA' && !proformaNumber.trim()) {
+      setProformaNumber(invoice.proformaNumber || invoiceNumber);
+      setProformaDate(invoice.proformaDate || invoiceDate);
+    } else if (nextType === 'FACTURE' && !invoiceNumber.trim()) {
+      setInvoiceNumber(invoice.definitiveInvoiceNumber || '');
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMsg(null);
 
-    if (!invoiceNumber.trim() && !proformaNumber.trim() && !definitiveInvoiceNumber.trim()) {
-      setErrorMsg('Au moins une référence (Facture ou Proforma) est obligatoire.');
-      return;
+    const trimmedProf = proformaNumber.trim();
+    const trimmedInv = invoiceNumber.trim();
+
+    if (documentType === 'PROFORMA') {
+      if (!trimmedProf) {
+        setErrorMsg('Le numéro de Proforma est obligatoire.');
+        return;
+      }
+    } else {
+      if (!trimmedInv) {
+        setErrorMsg('Le numéro de Facture est obligatoire.');
+        return;
+      }
+      if (trimmedProf && trimmedProf.toLowerCase() === trimmedInv.toLowerCase()) {
+        setErrorMsg(
+          `La nouvelle référence de Facture (${trimmedInv}) doit être différente de la référence Proforma (${trimmedProf}).`
+        );
+        return;
+      }
     }
+
     if (!supplierName.trim()) {
       setErrorMsg('Le nom du fournisseur est obligatoire.');
       return;
@@ -87,35 +116,60 @@ export const AdminEditInvoiceModal: React.FC<AdminEditInvoiceModalProps> = ({
       return;
     }
 
-    const trimmedProf = proformaNumber.trim();
-    const trimmedDef = definitiveInvoiceNumber.trim();
-    const nextInvoiceNumber = trimmedDef || invoiceNumber.trim() || trimmedProf;
-
     try {
       setIsSaving(true);
-      await onSave(invoice.id, {
-        paymentScheme,
-        invoiceNumber: nextInvoiceNumber,
-        invoiceDate,
-        proformaNumber: trimmedProf || undefined,
-        proformaDate: trimmedProf ? proformaDate || invoiceDate : undefined,
-        definitiveInvoiceNumber: trimmedDef || undefined,
-        definitiveInvoiceDate: trimmedDef ? definitiveInvoiceDate || invoiceDate : undefined,
-        dueDate: dueDate || undefined,
-        contractNumber: contractNumber.trim() || undefined,
-        supplierId: supplierId || undefined,
-        supplierName: supplierName.trim(),
-        supplierCountry: supplierCountry.trim(),
-        supplierAddress: supplierAddress.trim(),
-        supplierBank: supplierBank.trim(),
-        supplierIban: supplierIban.trim(),
-        supplierSwift: supplierSwift.trim().toUpperCase(),
-        currency,
-        totalAmount: Number(parsedAmount.toFixed(2)),
-        operationNature: operationNature.trim(),
-        purpose: purpose.trim(),
-        notes: notes.trim() || undefined,
-      });
+      await onSave(
+        invoice.id,
+        documentType === 'PROFORMA'
+          ? {
+              documentType: 'PROFORMA',
+              paymentScheme: 'STANDARD',
+              invoiceNumber: trimmedProf,
+              invoiceDate: proformaDate || invoiceDate,
+              proformaNumber: trimmedProf,
+              proformaDate: proformaDate || invoiceDate,
+              definitiveInvoiceNumber: '',
+              definitiveInvoiceDate: '',
+              dueDate: dueDate || undefined,
+              contractNumber: contractNumber.trim() || undefined,
+              supplierId: supplierId || undefined,
+              supplierName: supplierName.trim(),
+              supplierCountry: supplierCountry.trim(),
+              supplierAddress: supplierAddress.trim(),
+              supplierBank: supplierBank.trim(),
+              supplierIban: supplierIban.trim(),
+              supplierSwift: supplierSwift.trim().toUpperCase(),
+              currency,
+              totalAmount: Number(parsedAmount.toFixed(2)),
+              operationNature: operationNature.trim(),
+              purpose: purpose.trim(),
+              notes: notes.trim() || undefined,
+            }
+          : {
+              documentType: 'FACTURE',
+              paymentScheme: 'STANDARD',
+              invoiceNumber: trimmedInv,
+              invoiceDate,
+              definitiveInvoiceNumber: trimmedInv,
+              definitiveInvoiceDate: invoiceDate,
+              proformaNumber: trimmedProf || undefined,
+              proformaDate: trimmedProf ? proformaDate || invoiceDate : undefined,
+              dueDate: dueDate || undefined,
+              contractNumber: contractNumber.trim() || undefined,
+              supplierId: supplierId || undefined,
+              supplierName: supplierName.trim(),
+              supplierCountry: supplierCountry.trim(),
+              supplierAddress: supplierAddress.trim(),
+              supplierBank: supplierBank.trim(),
+              supplierIban: supplierIban.trim(),
+              supplierSwift: supplierSwift.trim().toUpperCase(),
+              currency,
+              totalAmount: Number(parsedAmount.toFixed(2)),
+              operationNature: operationNature.trim(),
+              purpose: purpose.trim(),
+              notes: notes.trim() || undefined,
+            }
+      );
       onClose();
     } catch (err: any) {
       setErrorMsg(err?.message || 'Erreur lors de la modification de la facture.');
@@ -144,11 +198,11 @@ export const AdminEditInvoiceModal: React.FC<AdminEditInvoiceModalProps> = ({
             <div>
               <h3 className="text-sm font-bold text-slate-900">
                 {isAdmin
-                  ? `Modification Administrateur — Facture ${invoice.invoiceNumber}`
-                  : `Modifier ma facture — ${invoice.invoiceNumber}`}
+                  ? `Modification Administrateur — Dossier ${invoice.invoiceNumber}`
+                  : `Modifier mon dossier — ${invoice.invoiceNumber}`}
               </h3>
               <p className="text-[11px] text-slate-500">
-                Mise à jour des données facture et fournisseur (tracée dans l&apos;audit DFC).
+                Mise à jour des données facture / Proforma et fournisseur (tracée dans l&apos;audit DFC).
               </p>
             </div>
           </div>
@@ -179,120 +233,135 @@ export const AdminEditInvoiceModal: React.FC<AdminEditInvoiceModalProps> = ({
           </div>
         )}
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-              N° Réf. Principal <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="text"
-              required
-              value={invoiceNumber}
-              onChange={e => setInvoiceNumber(e.target.value)}
-              className="w-full text-xs font-mono font-bold bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-2"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-              Date Document <span className="text-rose-500">*</span>
-            </label>
-            <input
-              type="date"
-              required
-              value={invoiceDate}
-              onChange={e => setInvoiceDate(e.target.value)}
-              className="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-2"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-              Date d&apos;Échéance
-            </label>
-            <input
-              type="date"
-              value={dueDate}
-              onChange={e => setDueDate(e.target.value)}
-              className="w-full text-xs bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-2"
-            />
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-slate-700 mb-1">
-              N° Contrat / Marché
-            </label>
-            <input
-              type="text"
-              value={contractNumber}
-              onChange={e => setContractNumber(e.target.value)}
-              className="w-full text-xs font-mono bg-slate-50 border border-slate-300 rounded-lg px-2.5 py-2"
-            />
-          </div>
-        </div>
-
-        {/* Proforma / Facture Définitive & Schéma de règlement */}
-        <div className="p-3.5 rounded-xl bg-indigo-50/50 border border-indigo-200 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+        {/* Type de document (Facture / Proforma) + références */}
+        <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div>
-              <label className="block text-[11px] font-semibold text-indigo-950 mb-1">
-                Schéma de Règlement
+              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                Type de document <span className="text-rose-500">*</span>
               </label>
               <select
-                value={paymentScheme}
-                onChange={e => setPaymentScheme(e.target.value as InvoicePaymentScheme)}
-                className="w-full text-xs font-semibold bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5"
+                aria-label="Type de document"
+                value={documentType}
+                onChange={e => handleDocumentTypeChange(e.target.value as InvoiceDocumentType)}
+                className="w-full text-xs font-bold bg-white border border-slate-300 rounded-lg px-2.5 py-2 text-slate-900"
               >
-                <option value="STANDARD">Standard</option>
-                <option value="50_LC_50_VIREMENT">50 % LC (Proforma) + 50 % Virement</option>
+                <option value="FACTURE">Facture</option>
+                <option value="PROFORMA">Proforma</option>
               </select>
             </div>
+
+            {documentType === 'PROFORMA' ? (
+              <>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    N° Proforma <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={proformaNumber}
+                    onChange={e => setProformaNumber(e.target.value)}
+                    placeholder="Ex : PROF-2026-045"
+                    className="w-full text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg px-2.5 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Date Proforma <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={proformaDate}
+                    onChange={e => setProformaDate(e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-2"
+                  />
+                </div>
+              </>
+            ) : (
+              <>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    N° Facture <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={invoiceNumber}
+                    onChange={e => setInvoiceNumber(e.target.value)}
+                    placeholder="Ex : FAC-2026-088"
+                    className="w-full text-xs font-mono font-bold bg-white border border-slate-300 rounded-lg px-2.5 py-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Date Facture <span className="text-rose-500">*</span>
+                  </label>
+                  <input
+                    type="date"
+                    required
+                    value={invoiceDate}
+                    onChange={e => setInvoiceDate(e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-2"
+                  />
+                </div>
+              </>
+            )}
+
             <div>
-              <label className="block text-[11px] font-semibold text-indigo-950 mb-1">
-                N° Proforma
+              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                N° Contrat / Marché
               </label>
               <input
                 type="text"
-                placeholder="Ex : PROF-2026-045"
-                value={proformaNumber}
-                onChange={e => setProformaNumber(e.target.value)}
-                className="w-full text-xs font-mono bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-semibold text-indigo-950 mb-1">
-                Date Proforma
-              </label>
-              <input
-                type="date"
-                value={proformaDate}
-                onChange={e => setProformaDate(e.target.value)}
-                className="w-full text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5"
+                value={contractNumber}
+                onChange={e => setContractNumber(e.target.value)}
+                className="w-full text-xs font-mono bg-white border border-slate-300 rounded-lg px-2.5 py-2"
               />
             </div>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
             <div>
-              <label className="block text-[11px] font-semibold text-indigo-950 mb-1">
-                N° Facture Définitive
-              </label>
-              <input
-                type="text"
-                placeholder="Laisser vide si en attente"
-                value={definitiveInvoiceNumber}
-                onChange={e => setDefinitiveInvoiceNumber(e.target.value)}
-                className="w-full text-xs font-mono font-bold bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] font-semibold text-indigo-950 mb-1">
-                Date Facture Définitive
+              <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                Date d&apos;Échéance
               </label>
               <input
                 type="date"
-                value={definitiveInvoiceDate}
-                onChange={e => setDefinitiveInvoiceDate(e.target.value)}
-                className="w-full text-xs bg-white border border-indigo-200 rounded-lg px-2.5 py-1.5"
+                value={dueDate}
+                onChange={e => setDueDate(e.target.value)}
+                className="w-full text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-1.5"
               />
             </div>
+
+            {documentType === 'FACTURE' && (
+              <>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    N° Proforma d&apos;origine (si convertie)
+                  </label>
+                  <input
+                    type="text"
+                    placeholder="Optionnel"
+                    value={proformaNumber}
+                    onChange={e => setProformaNumber(e.target.value)}
+                    className="w-full text-xs font-mono bg-white border border-slate-300 rounded-lg px-2.5 py-1.5"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Date Proforma d&apos;origine
+                  </label>
+                  <input
+                    type="date"
+                    value={proformaDate}
+                    onChange={e => setProformaDate(e.target.value)}
+                    className="w-full text-xs bg-white border border-slate-300 rounded-lg px-2.5 py-1.5"
+                  />
+                </div>
+              </>
+            )}
           </div>
         </div>
 

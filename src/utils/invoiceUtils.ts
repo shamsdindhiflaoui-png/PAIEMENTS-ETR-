@@ -1,6 +1,7 @@
 import {
   Invoice,
   InvoiceDocumentBasis,
+  InvoiceDocumentType,
   InvoicePaymentStatus,
   OrderDeduction,
   OrderDeductionCategory,
@@ -85,7 +86,6 @@ export function getInvoiceDefinitiveRef(
       date: (invoice.definitiveInvoiceDate || invoice.invoiceDate || '').trim() || undefined,
     };
   }
-  // Legacy or standard invoice created without a Proforma-first split
   if (!(invoice.proformaNumber || '').trim()) {
     const num = (invoice.invoiceNumber || '').trim();
     if (!num) return null;
@@ -95,6 +95,44 @@ export function getInvoiceDefinitiveRef(
     };
   }
   return null;
+}
+
+export function getInvoiceDocumentType(
+  invoice?: Pick<
+    Invoice,
+    'documentType' | 'invoiceNumber' | 'proformaNumber' | 'definitiveInvoiceNumber'
+  > | null
+): InvoiceDocumentType {
+  if (!invoice) return 'FACTURE';
+  const profRef = (invoice.proformaNumber || '').trim();
+  const defRef = (invoice.definitiveInvoiceNumber || '').trim();
+  if (profRef && !defRef) {
+    return 'PROFORMA';
+  }
+  if (defRef) {
+    return 'FACTURE';
+  }
+  return invoice.documentType === 'PROFORMA' ? 'PROFORMA' : 'FACTURE';
+}
+
+export function isProformaConverted(
+  invoice?: Pick<Invoice, 'proformaNumber' | 'definitiveInvoiceNumber'> | null
+): boolean {
+  if (!invoice) return false;
+  return Boolean(
+    (invoice.proformaNumber || '').trim() &&
+      (invoice.definitiveInvoiceNumber || '').trim()
+  );
+}
+
+export function doesInvoiceRequireConversion(
+  invoice?: Pick<
+    Invoice,
+    'documentType' | 'invoiceNumber' | 'proformaNumber' | 'definitiveInvoiceNumber'
+  > | null,
+  linkedOrdersCount: number = 0
+): boolean {
+  return getInvoiceDocumentType(invoice) === 'PROFORMA' && linkedOrdersCount >= 1;
 }
 
 export function getInvoiceAllReferenceNumbers(
@@ -137,47 +175,55 @@ export function getSuggestedNextTranche(
   invoice: Invoice,
   summary: InvoicePaymentSummary
 ): {
-  isMixedScheme: boolean;
+  documentType: InvoiceDocumentType;
+  requiresConversionToInvoice: boolean;
   transferType: OrderTransferType;
   documentBasis: InvoiceDocumentBasis;
   paymentMode: 'FULL' | 'PARTIAL';
   suggestedGrossAmount: number;
   label: string;
 } {
-  const profRef = getInvoiceProformaRef(invoice);
-  const defRef = getInvoiceDefinitiveRef(invoice);
-  const isMixedScheme = invoice.paymentScheme === '50_LC_50_VIREMENT';
+  const docType = getInvoiceDocumentType(invoice);
+  const requiresConversionToInvoice = doesInvoiceRequireConversion(
+    invoice,
+    summary.linkedOrders.length
+  );
 
-  if (isMixedScheme) {
+  if (docType === 'PROFORMA') {
     if (summary.linkedOrders.length === 0) {
-      const halfAmount = Number((invoice.totalAmount / 2).toFixed(2));
-      const suggested = Math.min(summary.remainingAmount, halfAmount);
       return {
-        isMixedScheme: true,
+        documentType: 'PROFORMA',
+        requiresConversionToInvoice: false,
         transferType: 'LC',
-        documentBasis: profRef ? 'PROFORMA' : 'FACTURE_DEFINITIVE',
-        paymentMode: suggested < summary.remainingAmount - 0.005 ? 'PARTIAL' : 'FULL',
-        suggestedGrossAmount: suggested,
-        label: 'Tranche 1/2 : 50 % LC (sur Proforma)',
+        documentBasis: 'PROFORMA',
+        paymentMode: 'FULL',
+        suggestedGrossAmount: summary.remainingAmount,
+        label: 'Dossier Proforma : 1er ordre (LC ou 1re tranche sur Proforma)',
       };
     }
+
     return {
-      isMixedScheme: true,
+      documentType: 'PROFORMA',
+      requiresConversionToInvoice: true,
       transferType: 'VIREMENT',
       documentBasis: 'FACTURE_DEFINITIVE',
       paymentMode: 'FULL',
       suggestedGrossAmount: summary.remainingAmount,
-      label: 'Tranche 2/2 : Solde Virement (sur Facture Définitive)',
+      label:
+        '1er ordre déjà saisi : convertir la Proforma en Facture avec une nouvelle référence',
     };
   }
 
   return {
-    isMixedScheme: false,
+    documentType: 'FACTURE',
+    requiresConversionToInvoice: false,
     transferType: 'VIREMENT',
-    documentBasis: profRef && !defRef ? 'PROFORMA' : 'FACTURE_DEFINITIVE',
+    documentBasis: 'FACTURE_DEFINITIVE',
     paymentMode: 'FULL',
     suggestedGrossAmount: summary.remainingAmount,
-    label: 'Règlement du solde disponible',
+    label: isProformaConverted(invoice)
+      ? 'Facture (convertie depuis Proforma)'
+      : 'Règlement sur Facture',
   };
 }
 
@@ -189,6 +235,7 @@ export function resolveOrderDocumentSnapshot(params: {
   inlineDefinitiveNumber?: string;
   inlineDefinitiveDate?: string;
   existingInvoices?: Invoice[];
+  existingLinkedOrdersCount?: number;
 }): {
   valid: boolean;
   error?: string;
@@ -210,6 +257,7 @@ export function resolveOrderDocumentSnapshot(params: {
     inlineDefinitiveNumber,
     inlineDefinitiveDate,
     existingInvoices = [],
+    existingLinkedOrdersCount = 0,
   } = params;
   const today = new Date().toISOString().split('T')[0];
 
@@ -229,15 +277,29 @@ export function resolveOrderDocumentSnapshot(params: {
 
   const profRef = getInvoiceProformaRef(invoice);
   const defRef = getInvoiceDefinitiveRef(invoice);
-  const resolvedBasis: InvoiceDocumentBasis =
-    documentBasis ?? (profRef && !defRef ? 'PROFORMA' : 'FACTURE_DEFINITIVE');
+  const mustConvert = doesInvoiceRequireConversion(invoice, existingLinkedOrdersCount);
+  const resolvedBasis: InvoiceDocumentBasis = mustConvert
+    ? 'FACTURE_DEFINITIVE'
+    : documentBasis ?? (profRef && !defRef ? 'PROFORMA' : 'FACTURE_DEFINITIVE');
 
   if (resolvedBasis === 'PROFORMA') {
+    if (mustConvert) {
+      return {
+        valid: false,
+        error: `Le premier ordre sur la Proforma ${profRef?.number || invoice.invoiceNumber} a déjà été saisi. Veuillez convertir la Proforma en Facture avec une nouvelle référence.`,
+        documentBasis: 'FACTURE_DEFINITIVE',
+        invoiceNumber: '',
+        invoiceDate: today,
+        proformaNumber: profRef?.number,
+        proformaDate: profRef?.date,
+      };
+    }
+
     const profNum = profRef?.number || (explicitInvoiceNumber || '').trim();
     if (!profNum) {
       return {
         valid: false,
-        error: 'Ce dossier ne comporte pas encore de référence Proforma.',
+        error: 'Ce dossier ne comporte pas de référence Proforma.',
         documentBasis: 'PROFORMA',
         invoiceNumber: '',
         invoiceDate: today,
@@ -266,7 +328,7 @@ export function resolveOrderDocumentSnapshot(params: {
     };
   }
 
-  // No definitive invoice registered on the dossier yet -> check inline input
+  // Converting Proforma -> Facture inline during order creation
   const trimmedInline = (inlineDefinitiveNumber || '').trim();
   const trimmedExplicit = (explicitInvoiceNumber || '').trim();
   const candidateDefNum =
@@ -276,11 +338,28 @@ export function resolveOrderDocumentSnapshot(params: {
       ? trimmedExplicit
       : '');
 
+  if (
+    profRef?.number &&
+    trimmedInline &&
+    trimmedInline.toLowerCase() === profRef.number.toLowerCase()
+  ) {
+    return {
+      valid: false,
+      error: `La nouvelle référence de Facture doit être différente de la référence Proforma (${profRef.number}).`,
+      documentBasis: 'FACTURE_DEFINITIVE',
+      invoiceNumber: trimmedInline,
+      invoiceDate: today,
+      proformaNumber: profRef.number,
+      proformaDate: profRef.date,
+    };
+  }
+
   if (!candidateDefNum) {
     return {
       valid: false,
-      error:
-        'Veuillez saisir le N° de la Facture Définitive reçue pour émettre cet ordre de paiement.',
+      error: mustConvert
+        ? `Le 1er ordre sur la Proforma ${profRef?.number || invoice.invoiceNumber} a déjà été saisi : veuillez convertir la Proforma en Facture en saisissant une nouvelle référence.`
+        : 'Veuillez saisir la nouvelle référence de Facture pour convertir la Proforma.',
       documentBasis: 'FACTURE_DEFINITIVE',
       invoiceNumber: '',
       invoiceDate: today,

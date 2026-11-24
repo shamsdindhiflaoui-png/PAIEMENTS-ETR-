@@ -161,17 +161,18 @@ test('buildHalfA4OrderPdf generates a single-page Half-A4 (210 x 148 mm) PDF doc
   assert.ok(output.byteLength > 1000);
 });
 
-test('computeOrderPrintData formats 50% LC on Proforma vs 50% Virement on Facture Définitive with Proforma recall', () => {
+test('computeOrderPrintData formats order on Proforma vs converted Facture with Proforma recall', () => {
   const mixedDossier: Invoice = {
     ...BASE_INVOICE,
     id: 'inv_mix',
+    documentType: 'FACTURE',
     invoiceNumber: 'FAC-DEF-2026-88',
     invoiceDate: '2026-03-20',
     proformaNumber: 'PROF-2026-12',
     proformaDate: '2026-03-01',
     definitiveInvoiceNumber: 'FAC-DEF-2026-88',
     definitiveInvoiceDate: '2026-03-20',
-    paymentScheme: '50_LC_50_VIREMENT',
+    paymentScheme: 'STANDARD',
     totalAmount: 100000,
   };
 

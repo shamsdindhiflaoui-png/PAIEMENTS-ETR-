@@ -112,10 +112,24 @@ export function validateAdminInvoiceUpdate(params: {
       ? payload.invoiceNumber.trim()
       : current.invoiceNumber.trim();
 
-  const nextNumber = nextDefinitive || explicitInvoice || nextProforma || '';
+  const nextNumber =
+    payload.documentType === 'PROFORMA'
+      ? nextProforma || explicitInvoice || ''
+      : nextDefinitive || explicitInvoice || nextProforma || '';
 
   if (!nextNumber) {
     return { valid: false, error: 'Le numéro de facture ou de Proforma est obligatoire.' };
+  }
+
+  if (
+    nextProforma &&
+    nextDefinitive &&
+    nextProforma.toLowerCase() === nextDefinitive.toLowerCase()
+  ) {
+    return {
+      valid: false,
+      error: `La nouvelle référence de Facture (${nextDefinitive}) doit être différente de la référence Proforma (${nextProforma}).`,
+    };
   }
 
   const candidateRefs = Array.from(

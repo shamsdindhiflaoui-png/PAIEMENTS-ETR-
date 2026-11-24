@@ -536,23 +536,61 @@ class ApiService {
     if (!res.ok) throw new Error('Erreur réinitialisation');
   }
 
-  public async downloadOrderDocument(
+  public async getOrderDocumentContent(
     orderId: string,
-    doc: { id?: string; name: string; dataBase64?: string; fileUrl?: string }
-  ): Promise<void> {
+    doc: { id?: string; name: string; mimeType?: string; dataBase64?: string; fileUrl?: string }
+  ): Promise<{ dataUrl: string; mimeType?: string }> {
     let href = doc.dataBase64 || doc.fileUrl;
+    let mimeType = doc.mimeType;
     if (!href) {
       const docKey = encodeURIComponent(doc.id || doc.name);
       const res = await fetch(`/api/orders/${encodeURIComponent(orderId)}/documents/${docKey}`, {
         headers: await this.getHeaders(),
       });
-      if (!res.ok) throw new Error('Impossible de télécharger la pièce justificative');
+      if (!res.ok) throw new Error('Impossible de charger la pièce justificative');
       const full = await res.json();
       href = full?.dataBase64 || full?.fileUrl;
+      mimeType = full?.mimeType || mimeType;
     }
-    if (!href) throw new Error('Aucun contenu fichier disponible pour cette pièce');
+    if (!href) {
+      throw new Error(
+        'Aucun fichier binaire enregistré pour cette pièce (document de démonstration ou métadonnées seules).'
+      );
+    }
+    return { dataUrl: href, mimeType };
+  }
+
+  public async getInvoiceDocumentContent(
+    invoiceId: string,
+    doc: { id?: string; name: string; mimeType?: string; dataBase64?: string; fileUrl?: string }
+  ): Promise<{ dataUrl: string; mimeType?: string }> {
+    let href = doc.dataBase64 || doc.fileUrl;
+    let mimeType = doc.mimeType;
+    if (!href) {
+      const docKey = encodeURIComponent(doc.id || doc.name);
+      const res = await fetch(`/api/invoices/${encodeURIComponent(invoiceId)}/documents/${docKey}`, {
+        headers: await this.getHeaders(),
+      });
+      if (!res.ok) throw new Error('Impossible de charger la pièce jointe');
+      const full = await res.json();
+      href = full?.dataBase64 || full?.fileUrl;
+      mimeType = full?.mimeType || mimeType;
+    }
+    if (!href) {
+      throw new Error(
+        'Aucun fichier binaire enregistré pour cette pièce (document de démonstration ou métadonnées seules).'
+      );
+    }
+    return { dataUrl: href, mimeType };
+  }
+
+  public async downloadOrderDocument(
+    orderId: string,
+    doc: { id?: string; name: string; dataBase64?: string; fileUrl?: string }
+  ): Promise<void> {
+    const { dataUrl } = await this.getOrderDocumentContent(orderId, doc);
     const a = document.createElement('a');
-    a.href = href;
+    a.href = dataUrl;
     a.download = doc.name;
     document.body.appendChild(a);
     a.click();
@@ -563,19 +601,9 @@ class ApiService {
     invoiceId: string,
     doc: { id?: string; name: string; dataBase64?: string; fileUrl?: string }
   ): Promise<void> {
-    let href = doc.dataBase64 || doc.fileUrl;
-    if (!href) {
-      const docKey = encodeURIComponent(doc.id || doc.name);
-      const res = await fetch(`/api/invoices/${encodeURIComponent(invoiceId)}/documents/${docKey}`, {
-        headers: await this.getHeaders(),
-      });
-      if (!res.ok) throw new Error('Impossible de télécharger la pièce jointe');
-      const full = await res.json();
-      href = full?.dataBase64 || full?.fileUrl;
-    }
-    if (!href) throw new Error('Aucun contenu fichier disponible pour cette pièce');
+    const { dataUrl } = await this.getInvoiceDocumentContent(invoiceId, doc);
     const a = document.createElement('a');
-    a.href = href;
+    a.href = dataUrl;
     a.download = doc.name;
     document.body.appendChild(a);
     a.click();

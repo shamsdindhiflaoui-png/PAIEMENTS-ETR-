@@ -51,7 +51,7 @@ function findLinkedInvoice(order: PaymentOrder, invoices?: Invoice[]): Invoice |
   );
 }
 
-function formatPaymentTypeShort(order: PaymentOrder, linkedInvoice?: Invoice): string {
+function formatPaymentTypeShort(order: PaymentOrder): string {
   const t = order.transferType || 'VIREMENT';
   let base = 'Virement bancaire';
   if (t === 'LC') {
@@ -62,9 +62,6 @@ function formatPaymentTypeShort(order: PaymentOrder, linkedInvoice?: Invoice): s
       : 'Remise Documentaire';
   } else if (t === 'AUTRE') {
     base = order.lcNumber ? `Autre (${cleanQrText(order.lcNumber)})` : 'Autre paiement';
-  }
-  if (linkedInvoice?.paymentScheme === '50_LC_50_VIREMENT') {
-    base += ' [50% LC / 50% Virement]';
   }
   return base;
 }
@@ -116,7 +113,7 @@ function buildSingleOrderQrLines(
   lines.push(invParts.join(' | '));
 
   // Payment type & domiciliary bank
-  const paymentTypeText = formatPaymentTypeShort(order, linkedInvoice);
+  const paymentTypeText = formatPaymentTypeShort(order);
   lines.push(
     `Type paiement: ${paymentTypeText} | Banque: ${cleanQrText(order.bankName)}${
       order.bankBranch ? ` (${cleanQrText(order.bankBranch)})` : ''

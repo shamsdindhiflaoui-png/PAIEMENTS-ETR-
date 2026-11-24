@@ -78,7 +78,9 @@ export type DocumentType =
 
 export type InvoiceDocumentBasis = 'FACTURE_DEFINITIVE' | 'PROFORMA';
 
-export type InvoicePaymentScheme = 'STANDARD' | '50_LC_50_VIREMENT';
+export type InvoiceDocumentType = 'FACTURE' | 'PROFORMA';
+
+export type InvoicePaymentScheme = 'STANDARD';
 
 export interface PaymentDocument {
   id: string;
@@ -100,6 +102,7 @@ export interface Invoice {
   id: string;
   invoiceNumber: string;
   invoiceDate: string;
+  documentType?: InvoiceDocumentType;
   proformaNumber?: string;
   proformaDate?: string;
   definitiveInvoiceNumber?: string;

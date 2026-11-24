@@ -24,7 +24,8 @@ const SAMPLE_INVOICE: Invoice = {
   proformaDate: '2026-09-01',
   definitiveInvoiceNumber: 'FAC-2026-88',
   definitiveInvoiceDate: '2026-10-15',
-  paymentScheme: '50_LC_50_VIREMENT',
+  documentType: 'FACTURE',
+  paymentScheme: 'STANDARD',
   contractNumber: 'CTR-2026-09',
   purpose: 'Achat tabac brut Virginie',
   operationNature: 'Importation matières premières',
@@ -126,7 +127,7 @@ test('buildConsultationQrPayload includes order ref, invoice, proforma, payment 
   assert.match(payload, /FAC-2026-88/);
   assert.match(payload, /PF-2026-12/);
   assert.match(payload, /CTR-2026-09/);
-  assert.match(payload, /Virement bancaire.*50% LC \/ 50% Virement/);
+  assert.match(payload, /Type paiement: Virement bancaire/);
   assert.match(payload, /Montant net: 48 500\.00 EUR/);
   assert.match(payload, /Brut impute: 50 000\.00 EUR/);
   assert.match(payload, /Deductions: 1 500\.00 EUR/);

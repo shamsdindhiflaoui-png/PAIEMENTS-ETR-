@@ -40,6 +40,7 @@ import {
   computeInvoicePaymentSummary,
   doesOrderBelongToInvoice,
   findReferenceConflict,
+  getInvoiceDocumentType,
   normalizeOrderDeductions,
   resolveOrderDocumentSnapshot,
   validateExistingOrderDeductionsUpdate,
@@ -112,16 +113,22 @@ function mapBankRow(row: typeof banks.$inferSelect): Bank {
 }
 
 function mapInvoiceRow(row: typeof invoices.$inferSelect): Invoice {
+  const documentType = getInvoiceDocumentType({
+    invoiceNumber: row.invoiceNumber,
+    proformaNumber: row.proformaNumber ?? undefined,
+    definitiveInvoiceNumber: row.definitiveInvoiceNumber ?? undefined,
+  });
   return {
     id: row.id,
     invoiceNumber: row.invoiceNumber,
     invoiceDate: row.invoiceDate,
+    documentType,
     dueDate: row.dueDate ?? undefined,
     proformaNumber: row.proformaNumber ?? undefined,
     proformaDate: row.proformaDate ?? undefined,
     definitiveInvoiceNumber: row.definitiveInvoiceNumber ?? undefined,
     definitiveInvoiceDate: row.definitiveInvoiceDate ?? undefined,
-    paymentScheme: (row.paymentScheme as InvoicePaymentScheme) ?? undefined,
+    paymentScheme: 'STANDARD',
     contractNumber: row.contractNumber ?? undefined,
     purpose: row.purpose,
     operationNature: row.operationNature,
@@ -830,39 +837,58 @@ class PostgresRepository {
       const now = new Date().toISOString();
       const today = now.split('T')[0];
 
-      const paymentScheme: InvoicePaymentScheme =
-        payload.paymentScheme === '50_LC_50_VIREMENT' ? '50_LC_50_VIREMENT' : 'STANDARD';
+      const explicitDocType = payload.documentType;
+      const rawProforma = (payload.proformaNumber || '').trim();
+      const rawDefinitive = (payload.definitiveInvoiceNumber || '').trim();
+      const rawExplicit = (payload.invoiceNumber || '').trim();
 
-      const proformaNumber = (payload.proformaNumber || '').trim() || undefined;
-      const proformaDate =
-        proformaNumber ? (payload.proformaDate || '').trim() || today : undefined;
+      const isProforma =
+        explicitDocType === 'PROFORMA' ||
+        (!explicitDocType && Boolean(rawProforma) && !rawDefinitive);
 
-      let definitiveInvoiceNumber =
-        (payload.definitiveInvoiceNumber || '').trim() || undefined;
-      let definitiveInvoiceDate = definitiveInvoiceNumber
-        ? (payload.definitiveInvoiceDate || '').trim() || today
-        : undefined;
+      let proformaNumber: string | undefined;
+      let proformaDate: string | undefined;
+      let definitiveInvoiceNumber: string | undefined;
+      let definitiveInvoiceDate: string | undefined;
+      let invoiceNumber: string;
+      let invoiceDate: string;
 
-      const explicitNumber = (payload.invoiceNumber || '').trim();
-      if (!definitiveInvoiceNumber && explicitNumber && explicitNumber !== proformaNumber) {
-        if (!proformaNumber || paymentScheme === 'STANDARD') {
-          definitiveInvoiceNumber = explicitNumber;
-          definitiveInvoiceDate =
-            (payload.definitiveInvoiceDate || payload.invoiceDate || '').trim() || today;
-        }
+      if (isProforma) {
+        proformaNumber = rawProforma || rawExplicit || undefined;
+        proformaDate = proformaNumber
+          ? (payload.proformaDate || payload.invoiceDate || '').trim() || today
+          : undefined;
+        definitiveInvoiceNumber = undefined;
+        definitiveInvoiceDate = undefined;
+        invoiceNumber = proformaNumber || '';
+        invoiceDate = proformaDate || today;
+      } else {
+        definitiveInvoiceNumber = rawDefinitive || rawExplicit || undefined;
+        definitiveInvoiceDate = definitiveInvoiceNumber
+          ? (payload.definitiveInvoiceDate || payload.invoiceDate || '').trim() || today
+          : undefined;
+        proformaNumber =
+          rawProforma &&
+          definitiveInvoiceNumber &&
+          rawProforma.toLowerCase() !== definitiveInvoiceNumber.toLowerCase()
+            ? rawProforma
+            : undefined;
+        proformaDate = proformaNumber
+          ? (payload.proformaDate || '').trim() || today
+          : undefined;
+        invoiceNumber = definitiveInvoiceNumber || '';
+        invoiceDate = definitiveInvoiceDate || today;
       }
 
-      const invoiceNumber =
-        definitiveInvoiceNumber || explicitNumber || proformaNumber || '';
       if (!invoiceNumber) {
         throw new DomainError(
-          'Veuillez saisir au minimum le numéro de Facture Définitive ou le numéro de Proforma.'
+          isProforma
+            ? 'Veuillez saisir le numéro de la Proforma.'
+            : 'Veuillez saisir le numéro de la Facture.'
         );
       }
 
-      const invoiceDate = definitiveInvoiceNumber
-        ? definitiveInvoiceDate || payload.invoiceDate || today
-        : (payload.invoiceDate || proformaDate || today);
+      const documentType = isProforma ? ('PROFORMA' as const) : ('FACTURE' as const);
 
       const allExisting = (await db.select().from(invoices)).map(mapInvoiceRow);
       const candidateRefs = Array.from(
@@ -875,7 +901,7 @@ class PostgresRepository {
       const conflict = findReferenceConflict(candidateRefs, allExisting);
       if (conflict) {
         throw new DomainError(
-          `Une fiche facture portant déjà la référence ${conflict.conflictRef} existe dans le registre.`
+          `Une fiche portant déjà la référence ${conflict.conflictRef} existe dans le registre.`
         );
       }
 
@@ -895,16 +921,17 @@ class PostgresRepository {
         id: 'inv_' + Date.now() + '_' + Math.random().toString(36).slice(2, 6),
         invoiceNumber,
         invoiceDate,
+        documentType,
         dueDate: payload.dueDate || undefined,
         proformaNumber,
         proformaDate,
         definitiveInvoiceNumber,
         definitiveInvoiceDate,
-        paymentScheme,
+        paymentScheme: 'STANDARD',
         contractNumber: (payload.contractNumber || '').trim() || undefined,
         purpose:
           (payload.purpose || '').trim() ||
-          `Règlement ${proformaNumber ? `Proforma ${proformaNumber}` : `facture ${invoiceNumber}`}`,
+          `Règlement ${isProforma ? `Proforma ${invoiceNumber}` : `Facture ${invoiceNumber}`}`,
         operationNature: payload.operationNature || 'Importation tabac brut',
         supplierId: payload.supplierId || undefined,
         supplierName,
@@ -932,7 +959,7 @@ class PostgresRepository {
         proformaDate: newInvoice.proformaDate ?? null,
         definitiveInvoiceNumber: newInvoice.definitiveInvoiceNumber ?? null,
         definitiveInvoiceDate: newInvoice.definitiveInvoiceDate ?? null,
-        paymentScheme: newInvoice.paymentScheme ?? null,
+        paymentScheme: 'STANDARD',
         contractNumber: newInvoice.contractNumber ?? null,
         purpose: newInvoice.purpose,
         operationNature: newInvoice.operationNature,
@@ -953,14 +980,6 @@ class PostgresRepository {
         isDemo: newInvoice.isDemo,
       });
 
-      const refDetails = [
-        proformaNumber ? `Proforma ${proformaNumber}` : null,
-        definitiveInvoiceNumber ? `Facture déf. ${definitiveInvoiceNumber}` : null,
-        paymentScheme === '50_LC_50_VIREMENT' ? 'Schéma 50% LC + 50% Virement' : null,
-      ]
-        .filter(Boolean)
-        .join(' · ');
-
       await this.insertAuditLog({
         entityType: 'INVOICE',
         entityId: newInvoice.id,
@@ -969,9 +988,7 @@ class PostgresRepository {
         userId: user.id,
         userName: user.name,
         userRole: user.role,
-        details: `Création du dossier ${newInvoice.invoiceNumber} (${newInvoice.supplierName} — ${newInvoice.totalAmount} ${newInvoice.currency})${
-          refDetails ? ` [${refDetails}]` : ''
-        }`,
+        details: `Création ${isProforma ? 'Proforma' : 'Facture'} ${newInvoice.invoiceNumber} (${newInvoice.supplierName} — ${newInvoice.totalAmount} ${newInvoice.currency})`,
       });
 
       return newInvoice;
@@ -1008,33 +1025,49 @@ class PostgresRepository {
         throw new DomainError(validation.error || 'Données de facture invalides.');
       }
 
-      const nextProformaNumber =
+      let nextProformaNumber =
         payload.proformaNumber !== undefined
           ? payload.proformaNumber.trim() || undefined
           : current.proformaNumber;
-      const nextProformaDate =
+      let nextProformaDate =
         payload.proformaDate !== undefined
           ? payload.proformaDate.trim() || undefined
           : current.proformaDate;
 
-      const nextDefinitiveNumber =
+      let nextDefinitiveNumber =
         payload.definitiveInvoiceNumber !== undefined
           ? payload.definitiveInvoiceNumber.trim() || undefined
           : current.definitiveInvoiceNumber;
-      const nextDefinitiveDate =
+      let nextDefinitiveDate =
         payload.definitiveInvoiceDate !== undefined
           ? payload.definitiveInvoiceDate.trim() || undefined
           : current.definitiveInvoiceDate;
 
-      const nextPaymentScheme: InvoicePaymentScheme | undefined =
-        payload.paymentScheme !== undefined
-          ? payload.paymentScheme
-          : current.paymentScheme;
+      if (payload.documentType === 'PROFORMA') {
+        nextProformaNumber =
+          nextProformaNumber || (payload.invoiceNumber || current.invoiceNumber).trim();
+        nextProformaDate = nextProformaDate || payload.invoiceDate || current.invoiceDate;
+        nextDefinitiveNumber = undefined;
+        nextDefinitiveDate = undefined;
+      } else if (payload.documentType === 'FACTURE') {
+        nextDefinitiveNumber =
+          nextDefinitiveNumber || (payload.invoiceNumber || current.invoiceNumber).trim();
+        nextDefinitiveDate = nextDefinitiveDate || payload.invoiceDate || current.invoiceDate;
+      }
+
+      const nextPaymentScheme: InvoicePaymentScheme = 'STANDARD';
 
       const syncedInvoiceNumber =
-        nextDefinitiveNumber || validation.normalizedNumber || nextProformaNumber || current.invoiceNumber;
+        payload.documentType === 'PROFORMA'
+          ? nextProformaNumber || validation.normalizedNumber || current.invoiceNumber
+          : nextDefinitiveNumber ||
+            validation.normalizedNumber ||
+            nextProformaNumber ||
+            current.invoiceNumber;
       const syncedInvoiceDate =
-        nextDefinitiveNumber && nextDefinitiveDate
+        payload.documentType === 'PROFORMA'
+          ? nextProformaDate || payload.invoiceDate || current.invoiceDate
+          : nextDefinitiveNumber && nextDefinitiveDate
           ? nextDefinitiveDate
           : payload.invoiceDate ?? current.invoiceDate;
 
@@ -1042,6 +1075,12 @@ class PostgresRepository {
         ...current,
         invoiceNumber: syncedInvoiceNumber,
         invoiceDate: syncedInvoiceDate,
+        documentType: getInvoiceDocumentType({
+          documentType: payload.documentType,
+          invoiceNumber: syncedInvoiceNumber,
+          proformaNumber: nextProformaNumber,
+          definitiveInvoiceNumber: nextDefinitiveNumber,
+        }),
         dueDate:
           payload.dueDate !== undefined ? payload.dueDate || undefined : current.dueDate,
         proformaNumber: nextProformaNumber,
@@ -1164,7 +1203,17 @@ class PostgresRepository {
 
       const defNum = (payload.definitiveInvoiceNumber || '').trim();
       if (!defNum) {
-        throw new DomainError('Le numéro de la Facture Définitive est obligatoire.');
+        throw new DomainError('La nouvelle référence de Facture est obligatoire.');
+      }
+
+      const sourceProformaRef = (current.proformaNumber || current.invoiceNumber || '').trim();
+      if (
+        sourceProformaRef &&
+        defNum.toLowerCase() === sourceProformaRef.toLowerCase()
+      ) {
+        throw new DomainError(
+          `La nouvelle référence de Facture doit être différente de la référence Proforma (${sourceProformaRef}).`
+        );
       }
 
       const conflict = findReferenceConflict([defNum], allInvoices, current.id);
@@ -1191,12 +1240,14 @@ class PostgresRepository {
 
       const updated: Invoice = {
         ...current,
-        proformaNumber: current.proformaNumber || current.invoiceNumber,
+        documentType: 'FACTURE',
+        proformaNumber: sourceProformaRef,
         proformaDate: current.proformaDate || current.invoiceDate,
         definitiveInvoiceNumber: defNum,
         definitiveInvoiceDate: defDate,
         invoiceNumber: defNum,
         invoiceDate: defDate,
+        paymentScheme: 'STANDARD',
         documents: nextDocs,
       };
 
@@ -1209,6 +1260,7 @@ class PostgresRepository {
           definitiveInvoiceDate: updated.definitiveInvoiceDate ?? null,
           invoiceNumber: updated.invoiceNumber,
           invoiceDate: updated.invoiceDate,
+          paymentScheme: 'STANDARD',
           documents: updated.documents ?? [],
         })
         .where(eq(invoices.id, id));
@@ -1221,9 +1273,9 @@ class PostgresRepository {
         userId: user.id,
         userName: user.name,
         userRole: user.role,
-        details: `Rattachement de la Facture Définitive N° ${defNum} (${defDate}) au dossier ouvert sur Proforma ${
+        details: `Conversion de la Proforma ${
           updated.proformaNumber || '—'
-        } — montant total inchangé (${updated.totalAmount} ${updated.currency})`,
+        } en Facture N° ${defNum} (${defDate}) — montant total inchangé (${updated.totalAmount} ${updated.currency})`,
       });
 
       return updated;
@@ -1388,6 +1440,7 @@ class PostgresRepository {
 
       let linkedInvoice: Invoice | undefined;
       let allInvoices: Invoice[] = [];
+      let linkedOrdersCount = 0;
       if (payload.invoiceId) {
         allInvoices = (await db.select().from(invoices)).map(mapInvoiceRow);
         linkedInvoice = allInvoices.find(inv => inv.id === payload.invoiceId);
@@ -1407,6 +1460,7 @@ class PostgresRepository {
             validation.error || 'Montant invalide par rapport au solde de la facture.'
           );
         }
+        linkedOrdersCount = validation.summary.linkedOrders.length;
         normalizedDeductions = validation.normalizedDeductions;
         deductionsTotal = validation.deductionsTotal;
         grossAmount = validation.grossAmount;
@@ -1420,6 +1474,7 @@ class PostgresRepository {
         inlineDefinitiveNumber: payload.definitiveInvoiceNumber,
         inlineDefinitiveDate: payload.definitiveInvoiceDate,
         existingInvoices: allInvoices,
+        existingLinkedOrdersCount: linkedOrdersCount,
       });
       if (!docSnap.valid) {
         throw new DomainError(
@@ -1593,7 +1648,7 @@ class PostgresRepository {
           userId: user.id,
           userName: user.name,
           userRole: user.role,
-          details: `Facture Définitive ${attachedDefinitive.definitiveInvoiceNumber} (${attachedDefinitive.definitiveInvoiceDate}) rattachée lors de l'ordre ${newOrder.orderNumber} sur Proforma ${attachedDefinitive.proformaNumber} — montant total du dossier inchangé.`,
+          details: `Conversion de la Proforma ${attachedDefinitive.proformaNumber} en Facture N° ${attachedDefinitive.definitiveInvoiceNumber} (${attachedDefinitive.definitiveInvoiceDate}) lors de la saisie de l'ordre ${newOrder.orderNumber} — montant total du dossier inchangé.`,
         });
       }
 

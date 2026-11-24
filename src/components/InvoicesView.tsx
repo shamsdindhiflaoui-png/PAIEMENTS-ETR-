@@ -22,10 +22,11 @@ import {
   Download,
   Printer,
   Pencil,
+  Eye,
 } from 'lucide-react';
 import {
   Invoice,
-  InvoicePaymentScheme,
+  InvoiceDocumentType,
   InvoicePaymentStatus,
   PaymentOrder,
   Supplier,
@@ -34,16 +35,21 @@ import {
 } from '../types/payment';
 import {
   computeInvoicePaymentSummary,
+  doesInvoiceRequireConversion,
   getInvoiceDefinitiveRef,
+  getInvoiceDocumentType,
   getInvoiceProformaRef,
   getOrderDeductionsTotal,
   getOrderInvoiceGrossAmount,
+  isProformaConverted,
 } from '../utils/invoiceUtils';
 import { STATUS_META } from '../utils/workflowRules';
 import { downloadTablePdf } from '../utils/tablePdf';
 import { canUserManageInvoice, isAdministrator } from '../utils/adminRules';
 import { AdminEditInvoiceModal } from './AdminEditInvoiceModal';
 import { AdminConfirmDeleteModal } from './AdminConfirmDeleteModal';
+import { AttachmentViewerModal } from './AttachmentViewerModal';
+import { PreviewableDocumentItem } from '../utils/documentPreview';
 import { api } from '../services/api';
 
 interface InvoicesViewProps {
@@ -121,18 +127,21 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
   );
   const [attachDefError, setAttachDefError] = useState<string | null>(null);
   const [isAttachingDef, setIsAttachingDef] = useState(false);
+  const [viewerState, setViewerState] = useState<{
+    documents: PreviewableDocumentItem[];
+    initialIndex: number;
+    title?: string;
+  } | null>(null);
 
   const isAdmin = isAdministrator(currentUser);
 
   // Create form fields
   const todayStr = new Date().toISOString().split('T')[0];
-  const [paymentScheme, setPaymentScheme] = useState<InvoicePaymentScheme>('STANDARD');
+  const [documentType, setDocumentType] = useState<InvoiceDocumentType>('FACTURE');
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(todayStr);
   const [proformaNumber, setProformaNumber] = useState('');
   const [proformaDate, setProformaDate] = useState(todayStr);
-  const [definitiveInvoiceNumber, setDefinitiveInvoiceNumber] = useState('');
-  const [definitiveInvoiceDate, setDefinitiveInvoiceDate] = useState(todayStr);
   const [dueDate, setDueDate] = useState('');
   const [contractNumber, setContractNumber] = useState('');
   const [selectedSupplierId, setSelectedSupplierId] = useState('');
@@ -207,13 +216,11 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
 
   const resetForm = () => {
     const today = new Date().toISOString().split('T')[0];
-    setPaymentScheme('STANDARD');
+    setDocumentType('FACTURE');
     setInvoiceNumber('');
     setInvoiceDate(today);
     setProformaNumber('');
     setProformaDate(today);
-    setDefinitiveInvoiceNumber('');
-    setDefinitiveInvoiceDate(today);
     setDueDate('');
     setContractNumber('');
     setSelectedSupplierId('');
@@ -275,18 +282,15 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     setFormError(null);
 
     const trimmedProf = proformaNumber.trim();
-    const trimmedDef = definitiveInvoiceNumber.trim();
-    const trimmedStd = invoiceNumber.trim();
+    const trimmedInv = invoiceNumber.trim();
 
-    if (paymentScheme === '50_LC_50_VIREMENT') {
+    if (documentType === 'PROFORMA') {
       if (!trimmedProf) {
-        setFormError(
-          'Pour un dossier 50 % LC + 50 % Virement, veuillez renseigner le N° de Facture Proforma.'
-        );
+        setFormError('Veuillez renseigner le N° de la Proforma.');
         return;
       }
-    } else if (!trimmedStd && !trimmedProf) {
-      setFormError('Veuillez renseigner le numéro de facture.');
+    } else if (!trimmedInv) {
+      setFormError('Veuillez renseigner le N° de la Facture.');
       return;
     }
 
@@ -307,28 +311,22 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     try {
       setIsSubmitting(true);
       const effectivePayload: Partial<Invoice> =
-        paymentScheme === '50_LC_50_VIREMENT'
+        documentType === 'PROFORMA'
           ? {
-              paymentScheme: '50_LC_50_VIREMENT',
+              documentType: 'PROFORMA',
+              paymentScheme: 'STANDARD',
               proformaNumber: trimmedProf,
               proformaDate: proformaDate || todayStr,
-              definitiveInvoiceNumber: trimmedDef || undefined,
-              definitiveInvoiceDate: trimmedDef
-                ? definitiveInvoiceDate || todayStr
-                : undefined,
-              invoiceNumber: trimmedDef || trimmedProf,
-              invoiceDate: trimmedDef
-                ? definitiveInvoiceDate || todayStr
-                : proformaDate || todayStr,
+              invoiceNumber: trimmedProf,
+              invoiceDate: proformaDate || todayStr,
             }
           : {
+              documentType: 'FACTURE',
               paymentScheme: 'STANDARD',
-              invoiceNumber: trimmedStd || trimmedProf,
-              invoiceDate: invoiceDate || proformaDate || todayStr,
-              proformaNumber: trimmedProf || undefined,
-              proformaDate: trimmedProf ? proformaDate || invoiceDate : undefined,
-              definitiveInvoiceNumber: trimmedStd || undefined,
-              definitiveInvoiceDate: trimmedStd ? invoiceDate : undefined,
+              invoiceNumber: trimmedInv,
+              invoiceDate: invoiceDate || todayStr,
+              definitiveInvoiceNumber: trimmedInv,
+              definitiveInvoiceDate: invoiceDate || todayStr,
             };
 
       await onCreateInvoice({
@@ -363,14 +361,25 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     e.preventDefault();
     if (!selectedInvoiceEntry || !onAttachDefinitiveInvoice) return;
     setAttachDefError(null);
-    if (!attachDefNumber.trim()) {
-      setAttachDefError('Veuillez saisir le N° de la Facture Définitive reçue.');
+    const trimmedNewRef = attachDefNumber.trim();
+    if (!trimmedNewRef) {
+      setAttachDefError('Veuillez saisir la nouvelle référence de Facture.');
+      return;
+    }
+    const sourceProforma = getInvoiceProformaRef(selectedInvoiceEntry.invoice);
+    if (
+      sourceProforma &&
+      trimmedNewRef.toLowerCase() === sourceProforma.number.toLowerCase()
+    ) {
+      setAttachDefError(
+        `La nouvelle référence de Facture doit être différente de la référence Proforma (${sourceProforma.number}).`
+      );
       return;
     }
     try {
       setIsAttachingDef(true);
       await onAttachDefinitiveInvoice(selectedInvoiceEntry.invoice.id, {
-        definitiveInvoiceNumber: attachDefNumber.trim(),
+        definitiveInvoiceNumber: trimmedNewRef,
         definitiveInvoiceDate: attachDefDate || undefined,
         document: attachDefDoc,
       });
@@ -378,7 +387,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
       setAttachDefDoc(undefined);
     } catch (err: any) {
       setAttachDefError(
-        err.message || 'Erreur lors de l’enregistrement de la facture définitive'
+        err.message || 'Erreur lors de la conversion de la Proforma en Facture'
       );
     } finally {
       setIsAttachingDef(false);
@@ -398,7 +407,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
     const canManageInvoice = canUserManageInvoice(currentUser, invoice).allowed;
     const profRef = getInvoiceProformaRef(invoice);
     const defRef = getInvoiceDefinitiveRef(invoice);
-    const isMixedScheme = invoice.paymentScheme === '50_LC_50_VIREMENT';
+    const docType = getInvoiceDocumentType(invoice);
+    const convertedFromProforma = isProformaConverted(invoice);
+    const needsConversion = doesInvoiceRequireConversion(invoice, summary.linkedOrders.length);
 
     return (
       <div className="space-y-5 max-w-6xl mx-auto pb-12">
@@ -421,14 +432,23 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                 <span className="text-base font-bold font-mono text-blue-700 whitespace-nowrap">
                   {invoice.invoiceNumber}
                 </span>
-                {isMixedScheme && (
-                  <span className="text-[11px] font-bold bg-indigo-50 text-indigo-800 px-2 py-0.5 rounded border border-indigo-200 whitespace-nowrap">
-                    50 % LC (Proforma) + 50 % Virement (Facture Déf.)
+                {docType === 'PROFORMA' ? (
+                  <span
+                    className={`text-[11px] font-bold px-2 py-0.5 rounded border whitespace-nowrap ${
+                      needsConversion
+                        ? 'bg-amber-100 text-amber-900 border-amber-300'
+                        : 'bg-indigo-50 text-indigo-800 border-indigo-200'
+                    }`}
+                  >
+                    {needsConversion
+                      ? 'Proforma · À convertir en Facture'
+                      : 'Proforma (1er ordre / LC)'}
                   </span>
-                )}
-                {profRef && !defRef && (
-                  <span className="text-[11px] font-semibold bg-amber-50 text-amber-800 px-2 py-0.5 rounded border border-amber-200 whitespace-nowrap">
-                    Sur Proforma · Attente Facture Définitive
+                ) : (
+                  <span className="text-[11px] font-semibold bg-slate-100 text-slate-700 px-2 py-0.5 rounded border border-slate-300 whitespace-nowrap">
+                    {convertedFromProforma && profRef
+                      ? `Facture (ex-Proforma ${profRef.number})`
+                      : 'Facture'}
                   </span>
                 )}
                 {invoice.isDemo && (
@@ -554,26 +574,57 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
           </div>
         </div>
 
-        {/* Attach Definitive Invoice Inline Card when Dossier started on Proforma */}
-        {profRef && !defRef && onAttachDefinitiveInvoice && (
+        {/* Proforma -> Facture Conversion Card */}
+        {docType === 'PROFORMA' && profRef && onAttachDefinitiveInvoice && (
           <form
             onSubmit={handleAttachDefinitiveSubmit}
-            className="bg-amber-50/70 rounded-xl border-2 border-amber-300 p-5 shadow-2xs space-y-3"
+            className={`rounded-xl border-2 p-5 shadow-2xs space-y-3 ${
+              needsConversion
+                ? 'bg-amber-50/90 border-amber-400'
+                : 'bg-indigo-50/50 border-indigo-200'
+            }`}
           >
             <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
               <div>
-                <h3 className="text-xs font-bold uppercase tracking-wider text-amber-950 flex items-center gap-2">
-                  <FileText className="w-4 h-4 text-amber-700" />
-                  <span>Renseigner la Facture Définitive reçue</span>
+                <h3
+                  className={`text-xs font-bold uppercase tracking-wider flex items-center gap-2 ${
+                    needsConversion ? 'text-amber-950' : 'text-indigo-950'
+                  }`}
+                >
+                  <FileText
+                    className={`w-4 h-4 ${
+                      needsConversion ? 'text-amber-700' : 'text-indigo-700'
+                    }`}
+                  />
+                  <span>
+                    {needsConversion
+                      ? 'Conversion obligatoire : Convertir la Proforma en Facture'
+                      : 'Convertir la Proforma en Facture'}
+                  </span>
                 </h3>
-                <p className="text-xs text-amber-900/80 mt-0.5">
-                  Ce dossier est actuellement ouvert sur Proforma{' '}
-                  <strong className="font-mono">{profRef.number}</strong>. Rattachez la Facture
-                  Définitive pour l’émission du Virement : le montant total du dossier (
-                  <strong className="font-mono">
-                    {formatMoney(invoice.totalAmount, invoice.currency)}
-                  </strong>
-                  ) reste inchangé.
+                <p
+                  className={`text-xs mt-0.5 ${
+                    needsConversion ? 'text-amber-900/90' : 'text-indigo-900/80'
+                  }`}
+                >
+                  {needsConversion ? (
+                    <>
+                      Le 1er ordre (<strong className="font-mono">{summary.linkedOrders[0]?.orderNumber}</strong>)
+                      a été saisi sur la Proforma <strong className="font-mono">{profRef.number}</strong>.
+                      Convertissez cette Proforma en Facture avec une <strong>nouvelle référence</strong>{' '}
+                      (le montant total de{' '}
+                      <strong className="font-mono">
+                        {formatMoney(invoice.totalAmount, invoice.currency)}
+                      </strong>{' '}
+                      reste inchangé).
+                    </>
+                  ) : (
+                    <>
+                      Ce dossier est ouvert en Proforma (<strong className="font-mono">{profRef.number}</strong>).
+                      Le 1er ordre (ex. LC) sera émis sur la Proforma ; après le 1er ordre, la conversion en
+                      Facture avec une nouvelle référence sera obligatoire.
+                    </>
+                  )}
                 </p>
               </div>
             </div>
@@ -587,20 +638,20 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
 
             <div className="grid grid-cols-1 sm:grid-cols-12 gap-3 items-end">
               <div className="sm:col-span-4">
-                <label className="block text-[11px] font-semibold text-amber-950 mb-1">
-                  N° Facture Définitive <span className="text-rose-500">*</span>
+                <label className="block text-[11px] font-semibold text-slate-800 mb-1">
+                  Nouvelle Réf. Facture <span className="text-rose-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="Ex : FAC-DEF-2026-088"
+                  placeholder="Ex : FAC-2026-088"
                   value={attachDefNumber}
                   onChange={e => setAttachDefNumber(e.target.value)}
                   className="w-full bg-white border border-amber-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600"
                 />
               </div>
               <div className="sm:col-span-3">
-                <label className="block text-[11px] font-semibold text-amber-950 mb-1">
-                  Date Facture Définitive
+                <label className="block text-[11px] font-semibold text-slate-800 mb-1">
+                  Date Facture
                 </label>
                 <input
                   type="date"
@@ -609,15 +660,15 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                   className="w-full bg-white border border-amber-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-2 focus:ring-amber-600"
                 />
               </div>
-              <div className="sm:col-span-3">
-                <label className="inline-flex items-center justify-center gap-1.5 w-full px-3 py-2 bg-white border border-amber-300 hover:bg-amber-100/50 rounded-lg text-xs font-semibold text-amber-900 cursor-pointer truncate">
+              <div className="sm:col-span-3 flex items-center gap-1.5">
+                <label className="inline-flex items-center justify-center gap-1.5 flex-1 min-w-0 px-3 py-2 bg-white border border-amber-300 hover:bg-amber-100/50 rounded-lg text-xs font-semibold text-amber-900 cursor-pointer truncate">
                   <Upload className="w-3.5 h-3.5 shrink-0" />
                   <span className="truncate">
                     {attachDefDoc ? attachDefDoc.name : 'Joindre PDF (optionnel)'}
                   </span>
                   <input
                     type="file"
-                    accept=".pdf,.png,.jpg,.jpeg"
+                    accept=".pdf,.png,.jpg,.jpeg,.txt,.csv"
                     onChange={e => {
                       const file = e.target.files?.[0];
                       if (!file) return;
@@ -640,6 +691,29 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                     className="hidden"
                   />
                 </label>
+                {attachDefDoc && (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setViewerState({
+                        documents: [
+                          {
+                            ...attachDefDoc,
+                            sourceKind: 'DRAFT',
+                            sourceLabel: 'Nouvelle Facture',
+                          },
+                        ],
+                        initialIndex: 0,
+                        title: `Aperçu Facture`,
+                      })
+                    }
+                    className="p-2 bg-white border border-amber-300 hover:bg-amber-100 text-amber-900 rounded-lg shrink-0"
+                    title="Aperçu du document sélectionné"
+                    aria-label="Aperçu du document sélectionné"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                  </button>
+                )}
               </div>
               <div className="sm:col-span-2">
                 <button
@@ -648,7 +722,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                   className="w-full inline-flex items-center justify-center gap-1.5 px-3 py-2 bg-amber-700 hover:bg-amber-800 text-white rounded-lg text-xs font-bold transition-colors shadow-xs disabled:opacity-60"
                 >
                   <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>{isAttachingDef ? 'Enreg...' : 'Valider'}</span>
+                  <span>{isAttachingDef ? 'Conversion...' : 'Convertir en Facture'}</span>
                 </button>
               </div>
             </div>
@@ -665,7 +739,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
             </h3>
             <dl className="grid grid-cols-2 gap-x-4 gap-y-3 text-xs">
               <div>
-                <dt className="text-slate-500">Réf. Proforma (LC)</dt>
+                <dt className="text-slate-500">Réf. Proforma</dt>
                 <dd className="font-mono font-semibold text-slate-900 mt-0.5">
                   {profRef ? (
                     <>
@@ -680,7 +754,7 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                 </dd>
               </div>
               <div>
-                <dt className="text-slate-500">Réf. Facture Définitive</dt>
+                <dt className="text-slate-500">Réf. Facture</dt>
                 <dd className="font-mono font-bold text-blue-700 mt-0.5">
                   {defRef ? (
                     <>
@@ -691,17 +765,19 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                     </>
                   ) : (
                     <span className="text-amber-700 font-sans font-semibold">
-                      En attente de réception
+                      {needsConversion ? 'À convertir maintenant' : 'En attente de conversion'}
                     </span>
                   )}
                 </dd>
               </div>
               <div>
-                <dt className="text-slate-500">Schéma de règlement</dt>
+                <dt className="text-slate-500">Type de document</dt>
                 <dd className="font-semibold text-slate-900 mt-0.5">
-                  {isMixedScheme
-                    ? '50 % LC (Proforma) + 50 % Virement'
-                    : 'Standard'}
+                  {docType === 'PROFORMA'
+                    ? 'Proforma'
+                    : convertedFromProforma
+                    ? 'Facture (convertie depuis Proforma)'
+                    : 'Facture'}
                 </dd>
               </div>
               <div>
@@ -940,34 +1016,77 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
         </div>
 
         {/* Attached Documents */}
-        {invoice.documents && invoice.documents.length > 0 && (
-          <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs space-y-3">
-            <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
-              Pièces Jointes ({invoice.documents.length})
-            </h3>
-            <div className="flex flex-wrap gap-2.5">
-              {invoice.documents.map(doc => (
-                <div
-                  key={doc.id || `${doc.name}-${doc.uploadedAt}`}
-                  className="inline-flex items-center gap-2.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs"
-                >
-                  <FileText className="w-4 h-4 text-blue-600 shrink-0" />
-                  <span className="font-medium text-slate-800">{doc.name}</span>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      api.downloadInvoiceDocument(invoice.id, doc).catch(() => {});
-                    }}
-                    className="text-blue-700 hover:text-blue-900 inline-flex items-center gap-1 font-semibold"
+        {invoice.documents && invoice.documents.length > 0 && (() => {
+          const previewDocs: PreviewableDocumentItem[] = invoice.documents.map((doc, idx) => ({
+            id: doc.id || `inv_doc_${idx}`,
+            name: doc.name,
+            type: doc.type,
+            docRole: doc.docRole,
+            size: doc.size,
+            mimeType: doc.mimeType,
+            uploadedAt: doc.uploadedAt,
+            uploadedBy: doc.uploadedBy,
+            dataBase64: doc.dataBase64,
+            fileUrl: doc.fileUrl,
+            sourceKind: 'INVOICE',
+            sourceEntityId: invoice.id,
+            sourceLabel: `Facture ${invoice.invoiceNumber}`,
+          }));
+          return (
+            <div className="bg-white rounded-xl border border-slate-200 p-5 shadow-2xs space-y-3">
+              <h3 className="text-xs font-bold text-slate-900 uppercase tracking-wider">
+                Pièces Jointes ({invoice.documents.length})
+              </h3>
+              <div className="flex flex-wrap gap-2.5">
+                {previewDocs.map((doc, idx) => (
+                  <div
+                    key={doc.id || `${doc.name}-${doc.uploadedAt}`}
+                    className="inline-flex items-center gap-2.5 px-3 py-2 rounded-lg bg-slate-50 border border-slate-200 text-xs"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span>Télécharger</span>
-                  </button>
-                </div>
-              ))}
+                    <FileText className="w-4 h-4 text-blue-600 shrink-0" />
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setViewerState({
+                          documents: previewDocs,
+                          initialIndex: idx,
+                          title: `Facture ${invoice.invoiceNumber}`,
+                        })
+                      }
+                      className="font-medium text-slate-800 hover:text-blue-700 hover:underline text-left"
+                    >
+                      {doc.name}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setViewerState({
+                          documents: previewDocs,
+                          initialIndex: idx,
+                          title: `Facture ${invoice.invoiceNumber}`,
+                        })
+                      }
+                      className="px-2 py-1 rounded bg-blue-700 hover:bg-blue-800 text-white inline-flex items-center gap-1 font-semibold"
+                    >
+                      <Eye className="w-3 h-3" />
+                      <span>Aperçu</span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        api.downloadInvoiceDocument(invoice.id, doc).catch(() => {});
+                      }}
+                      className="text-blue-700 hover:text-blue-900 inline-flex items-center gap-1 font-semibold"
+                    >
+                      <Download className="w-3.5 h-3.5" />
+                      <span>Télécharger</span>
+                    </button>
+                  </div>
+                ))}
+              </div>
             </div>
-          </div>
-        )}
+          );
+        })()}
 
         {editingInvoiceEntry && onUpdateInvoice && (
           <AdminEditInvoiceModal
@@ -998,6 +1117,15 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
               setSelectedInvoiceId(null);
             }}
             onClose={() => setAdminDeleteEntry(null)}
+          />
+        )}
+
+        {viewerState && (
+          <AttachmentViewerModal
+            documents={viewerState.documents}
+            initialIndex={viewerState.initialIndex}
+            title={viewerState.title}
+            onClose={() => setViewerState(null)}
           />
         )}
       </div>
@@ -1116,219 +1244,112 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
             </div>
           )}
 
-          {/* Schéma de règlement du dossier */}
-          <div className="p-3.5 rounded-xl bg-slate-50 border border-slate-200 space-y-2.5">
-            <div className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-              Schéma de Règlement &amp; Références Documentaires
-            </div>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
-              <button
-                type="button"
-                onClick={() => setPaymentScheme('STANDARD')}
-                className={`p-3 rounded-lg border text-left transition-colors ${
-                  paymentScheme === 'STANDARD'
-                    ? 'bg-blue-50 border-blue-600 ring-1 ring-blue-600'
-                    : 'bg-white border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                <div className="text-xs font-bold text-slate-900">
-                  Facture Standard (Règlement classique)
-                </div>
-                <div className="text-[11px] text-slate-500 mt-0.5">
-                  Une facture unique (règlement en 1 ou plusieurs ordres) avec Proforma optionnelle.
-                </div>
-              </button>
-              <button
-                type="button"
-                onClick={() => setPaymentScheme('50_LC_50_VIREMENT')}
-                className={`p-3 rounded-lg border text-left transition-colors ${
-                  paymentScheme === '50_LC_50_VIREMENT'
-                    ? 'bg-indigo-50 border-indigo-600 ring-1 ring-indigo-600'
-                    : 'bg-white border-slate-200 hover:border-slate-300'
-                }`}
-              >
-                <div className="text-xs font-bold text-indigo-950">
-                  Dossier Mixte : 50 % LC (Proforma) + 50 % Virement (Facture Déf.)
-                </div>
-                <div className="text-[11px] text-indigo-800/80 mt-0.5">
-                  Ouverture sur Proforma pour la LC, puis rattachement de la Facture Définitive pour le Virement.
-                </div>
-              </button>
-            </div>
-          </div>
+          {/* Type de document (Facture / Proforma) + Références */}
+          <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end">
+              <div>
+                <label className="block text-xs font-semibold text-slate-800 mb-1">
+                  Type de document <span className="text-rose-500">*</span>
+                </label>
+                <select
+                  aria-label="Type de document"
+                  value={documentType}
+                  onChange={e => setDocumentType(e.target.value as InvoiceDocumentType)}
+                  className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-bold text-slate-900 focus:outline-none focus:ring-2 focus:ring-blue-600"
+                >
+                  <option value="FACTURE">Facture</option>
+                  <option value="PROFORMA">Proforma</option>
+                </select>
+              </div>
 
-          {/* Row 1: Références facture / Proforma */}
-          {paymentScheme === '50_LC_50_VIREMENT' ? (
-            <div className="p-4 rounded-xl bg-indigo-50/50 border border-indigo-200 space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-indigo-950 mb-1">
-                    N° Proforma (pour la LC) <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex : PROF-2026-045"
-                    value={proformaNumber}
-                    onChange={e => setProformaNumber(e.target.value)}
-                    className="w-full bg-white border border-indigo-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-indigo-950 mb-1">
-                    Date Proforma <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={proformaDate}
-                    onChange={e => setProformaDate(e.target.value)}
-                    className="w-full bg-white border border-indigo-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    N° Facture Définitive (si reçue)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Laisser vide si en attente"
-                    value={definitiveInvoiceNumber}
-                    onChange={e => setDefinitiveInvoiceNumber(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Date Facture Définitive
-                  </label>
-                  <input
-                    type="date"
-                    value={definitiveInvoiceDate}
-                    onChange={e => setDefinitiveInvoiceDate(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Date d&apos;Échéance
-                  </label>
-                  <input
-                    type="date"
-                    value={dueDate}
-                    onChange={e => setDueDate(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    N° Contrat / Marché
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex : CT-2026/MTK-042"
-                    value={contractNumber}
-                    onChange={e => setContractNumber(e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
-                  />
-                </div>
-              </div>
-              {parseFloat(totalAmount) > 0 && (
-                <div className="p-2.5 rounded-lg bg-white border border-indigo-200 text-[11px] text-indigo-950 flex flex-wrap items-center justify-between gap-2">
-                  <span>
-                    <strong>Répartition automatique prévue :</strong> Tranche 1 (50 % LC sur Proforma) :{' '}
-                    <strong className="font-mono">
-                      {formatMoney(Number((parseFloat(totalAmount) / 2).toFixed(2)), currency)}
-                    </strong>{' '}
-                    · Tranche 2 (50 % Virement sur Facture Définitive) :{' '}
-                    <strong className="font-mono">
-                      {formatMoney(Number((parseFloat(totalAmount) / 2).toFixed(2)), currency)}
-                    </strong>
-                  </span>
-                </div>
+              {documentType === 'PROFORMA' ? (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      N° Proforma <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex : PROF-2026-045"
+                      value={proformaNumber}
+                      onChange={e => setProformaNumber(e.target.value)}
+                      className="w-full bg-white border border-indigo-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Date Proforma <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={proformaDate}
+                      onChange={e => setProformaDate(e.target.value)}
+                      className="w-full bg-white border border-indigo-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-indigo-600"
+                    />
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      N° Facture <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="text"
+                      placeholder="Ex : FAC-2026-045"
+                      value={invoiceNumber}
+                      onChange={e => setInvoiceNumber(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-slate-700 mb-1">
+                      Date Facture <span className="text-rose-500">*</span>
+                    </label>
+                    <input
+                      type="date"
+                      value={invoiceDate}
+                      onChange={e => setInvoiceDate(e.target.value)}
+                      className="w-full bg-white border border-slate-300 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                    />
+                  </div>
+                </>
               )}
-            </div>
-          ) : (
-            <div className="space-y-3">
-              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    N° Facture <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex : FAC-2026-045"
-                    value={invoiceNumber}
-                    onChange={e => setInvoiceNumber(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs font-mono font-bold text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
 
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Date Facture <span className="text-rose-500">*</span>
-                  </label>
-                  <input
-                    type="date"
-                    value={invoiceDate}
-                    onChange={e => setInvoiceDate(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    Date d&apos;Échéance
-                  </label>
-                  <input
-                    type="date"
-                    value={dueDate}
-                    onChange={e => setDueDate(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold text-slate-700 mb-1">
-                    N° Contrat / Marché
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex : CT-2026/MTK-042"
-                    value={contractNumber}
-                    onChange={e => setContractNumber(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  Date d&apos;Échéance
+                </label>
+                <input
+                  type="date"
+                  value={dueDate}
+                  onChange={e => setDueDate(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                />
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    N° Proforma associée (optionnel)
-                  </label>
-                  <input
-                    type="text"
-                    placeholder="Ex : PROF-2026-045 (si issue d'une Proforma)"
-                    value={proformaNumber}
-                    onChange={e => setProformaNumber(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs font-mono text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Date Proforma (si renseignée)
-                  </label>
-                  <input
-                    type="date"
-                    value={proformaDate}
-                    onChange={e => setProformaDate(e.target.value)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:bg-white focus:outline-none focus:ring-1 focus:ring-blue-600"
-                  />
-                </div>
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">
+                  N° Contrat / Marché
+                </label>
+                <input
+                  type="text"
+                  placeholder="Ex : CT-2026/MTK-042"
+                  value={contractNumber}
+                  onChange={e => setContractNumber(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-lg px-3 py-2 text-xs text-slate-900 focus:outline-none focus:ring-1 focus:ring-blue-600"
+                />
               </div>
             </div>
-          )}
+
+            {documentType === 'PROFORMA' && (
+              <div className="p-2.5 rounded-lg bg-indigo-50/80 border border-indigo-200 text-[11px] text-indigo-950">
+                Le 1er ordre (ex. LC) sera émis sur cette <strong>Proforma</strong>. Après saisie du
+                premier ordre, la Proforma devra être convertie en <strong>Facture</strong> avec une
+                nouvelle référence.
+              </div>
+            )}
+          </div>
 
           {/* Row 2: Fournisseur */}
           <div className="p-4 rounded-xl bg-slate-50 border border-slate-200 space-y-3">
@@ -1543,8 +1564,28 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                   <span className="font-medium">{doc.name}</span>
                   <button
                     type="button"
+                    onClick={() =>
+                      setViewerState({
+                        documents: documents.map(d => ({
+                          ...d,
+                          sourceKind: 'DRAFT' as const,
+                          sourceLabel: 'Nouvelle Facture',
+                        })),
+                        initialIndex: idx,
+                        title: 'Nouvelle Facture (Brouillon)',
+                      })
+                    }
+                    className="text-blue-700 hover:text-blue-950 p-0.5"
+                    title="Aperçu"
+                    aria-label={`Aperçu ${doc.name}`}
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    type="button"
                     onClick={() => setDocuments(prev => prev.filter((_, i) => i !== idx))}
                     className="text-blue-500 hover:text-rose-600"
+                    title="Retirer"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
@@ -1674,7 +1715,12 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                   const statusMeta = STATUS_BADGE[summary.paymentStatus];
                   const canManageRow = canUserManageInvoice(currentUser, invoice).allowed;
                   const rowProfRef = getInvoiceProformaRef(invoice);
-                  const rowDefRef = getInvoiceDefinitiveRef(invoice);
+                  const rowDocType = getInvoiceDocumentType(invoice);
+                  const rowConverted = isProformaConverted(invoice);
+                  const rowNeedsConversion = doesInvoiceRequireConversion(
+                    invoice,
+                    summary.linkedOrders.length
+                  );
                   return (
                     <tr
                       key={invoice.id}
@@ -1688,9 +1734,15 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                           <span className="font-mono font-bold text-blue-700 group-hover:underline">
                             {invoice.invoiceNumber}
                           </span>
-                          {invoice.paymentScheme === '50_LC_50_VIREMENT' && (
-                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded bg-indigo-50 text-indigo-700 border border-indigo-200">
-                              50% LC / 50% Vir.
+                          {rowDocType === 'PROFORMA' && (
+                            <span
+                              className={`text-[10px] font-semibold px-1.5 py-0.5 rounded border ${
+                                rowNeedsConversion
+                                  ? 'bg-amber-100 text-amber-900 border-amber-300'
+                                  : 'bg-indigo-50 text-indigo-700 border-indigo-200'
+                              }`}
+                            >
+                              {rowNeedsConversion ? 'À convertir en Facture' : 'Proforma'}
                             </span>
                           )}
                           {invoice.isDemo && (
@@ -1699,11 +1751,9 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
                             </span>
                           )}
                         </div>
-                        {rowProfRef && (
+                        {rowConverted && rowProfRef && (
                           <div className="text-[10px] font-mono text-slate-500 mt-0.5">
-                            {rowDefRef
-                              ? `Proforma : ${rowProfRef.number}`
-                              : 'Proforma seule · Attente Facture Déf.'}
+                            Convertie depuis Proforma {rowProfRef.number}
                           </div>
                         )}
                       </td>
@@ -1831,6 +1881,15 @@ export const InvoicesView: React.FC<InvoicesViewProps> = ({
             await onDeleteInvoice(adminDeleteEntry.invoice.id);
           }}
           onClose={() => setAdminDeleteEntry(null)}
+        />
+      )}
+
+      {viewerState && (
+        <AttachmentViewerModal
+          documents={viewerState.documents}
+          initialIndex={viewerState.initialIndex}
+          title={viewerState.title}
+          onClose={() => setViewerState(null)}
         />
       )}
     </div>

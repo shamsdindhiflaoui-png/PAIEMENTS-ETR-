@@ -261,7 +261,7 @@ export default function App() {
       const updated = await api.attachDefinitiveInvoice(id, payload);
       showToast(
         'success',
-        `Facture définitive ${updated.definitiveInvoiceNumber || updated.invoiceNumber} rattachée au dossier`
+        `Proforma convertie en Facture ${updated.definitiveInvoiceNumber || updated.invoiceNumber}`
       );
       await loadAllData();
       return updated;
@@ -946,6 +946,7 @@ export default function App() {
                 setSelectedConsultationId(id);
                 setActiveView('consultation_detail');
               }}
+              onRefresh={loadAllData}
             />
           )}
 
